@@ -1,5 +1,5 @@
-bin/
-obj/
+plugin/**/bin/
+plugin/**/obj/
 target/
 *.user
 .DS_Store
