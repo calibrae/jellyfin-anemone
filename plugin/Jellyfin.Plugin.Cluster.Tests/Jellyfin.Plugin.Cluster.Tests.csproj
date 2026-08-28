@@ -29,8 +29,4 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Jellyfin.Plugin.Cluster\Jellyfin.Plugin.Cluster.csproj" />
-  </ItemGroup>
-
 </Project>
