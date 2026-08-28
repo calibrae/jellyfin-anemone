@@ -17,7 +17,7 @@ Target: speedwagon (Jellyfin 10.11.0, `Jellyfin.app`) + trish (M1, 10.240.0.2 ov
 ```
 cd agent && cargo build --release
 ./target/release/jfc-mock-server --listen 127.0.0.1:8097 --secret dev --out-dir /tmp/jfc-out --job testsrc --once &
-./target/release/jfc-agent --server ws://127.0.0.1:8097/Cluster/agents/ws --secret dev --ffmpeg /opt/homebrew/bin/ffmpeg
+./target/release/jfc-agent --server-url ws://127.0.0.1:8097/Cluster/agents/ws --secret dev --ffmpeg /opt/homebrew/bin/ffmpeg
 ```
 Expect `testjob0.ts … testjob.m3u8` in `/tmp/jfc-out`, no `.part` leftovers, `exit code 0`. Type `q` in the mock's
 terminal during a second run to check early stop.
