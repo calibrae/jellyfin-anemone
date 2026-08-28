@@ -1,14 +1,14 @@
 #!/bin/sh
-# Remove the jfc-agent LaunchDaemon. Leaves /etc/jfc-agent.toml in place unless -c is given.
+# Remove the polyp LaunchDaemon. Leaves /etc/polyp.toml in place unless -c is given.
 #
 # Usage: sudo ./uninstall.sh [-c]
-#   -c  also remove /etc/jfc-agent.toml
+#   -c  also remove /etc/polyp.toml
 set -eu
 
-BIN_DST="/usr/local/bin/jfc-agent"
-CONFIG_DST="/etc/jfc-agent.toml"
-PLIST_DST="/Library/LaunchDaemons/net.calii.jfc-agent.plist"
-LABEL="net.calii.jfc-agent"
+BIN_DST="/usr/local/bin/polyp"
+CONFIG_DST="/etc/polyp.toml"
+PLIST_DST="/Library/LaunchDaemons/net.calii.polyp.plist"
+LABEL="net.calii.polyp"
 REMOVE_CONFIG=0
 
 while getopts "c" opt; do

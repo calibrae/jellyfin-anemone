@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>net.calii.polyp</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/polyp</string>
+		<string>--config</string>
+		<string>/etc/polyp.toml</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/var/log/polyp/polyp.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/var/log/polyp/polyp.err.log</string>
+
+	<key>WorkingDirectory</key>
+	<string>/usr/local/bin</string>
+</dict>
+</plist>

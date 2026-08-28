@@ -1,4 +1,4 @@
-//! Config: a TOML file (`--config`, default `/etc/jfc-agent.toml`) with CLI overrides taking
+//! Config: a TOML file (`--config`, default `/etc/polyp.toml`) with CLI overrides taking
 //! precedence over file values, which take precedence over built-in defaults.
 
 use std::path::{Path, PathBuf};
@@ -9,15 +9,15 @@ use serde::Deserialize;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "jfc-agent",
+    name = "polyp",
     about = "Runs ffmpeg transcodes on behalf of a Jellyfin cluster plugin"
 )]
 pub struct Cli {
     /// Path to the TOML config file.
-    #[arg(long, default_value = "/etc/jfc-agent.toml")]
+    #[arg(long, default_value = "/etc/polyp.toml")]
     pub config: PathBuf,
 
-    /// Control WebSocket URL, e.g. ws://10.240.0.1:8096/Cluster/agents/ws
+    /// Control WebSocket URL, e.g. ws://10.240.0.1:8096/Anemone/agents/ws
     #[arg(long)]
     pub server_url: Option<String>,
 
@@ -137,7 +137,7 @@ fn default_short_hostname() -> String {
         .and_then(|h| h.into_string().ok())
         .map(|h| h.split('.').next().unwrap_or(&h).to_string())
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "jfc-agent".to_string())
+        .unwrap_or_else(|| "polyp".to_string())
 }
 
 #[cfg(test)]
@@ -146,7 +146,7 @@ mod tests {
 
     fn empty_cli() -> Cli {
         Cli {
-            config: PathBuf::from("/nonexistent/jfc-agent.toml"),
+            config: PathBuf::from("/nonexistent/polyp.toml"),
             server_url: None,
             secret: None,
             name: None,
@@ -212,10 +212,10 @@ mod tests {
     #[test]
     fn parses_example_toml_shape() {
         let toml_text = r#"
-            server_url = "ws://10.240.0.1:8096/Cluster/agents/ws"
+            server_url = "ws://10.240.0.1:8096/Anemone/agents/ws"
             secret = "sekrit"
             name = "trish"
-            ffmpeg = "/opt/jfc/ffmpeg"
+            ffmpeg = "/opt/anemone/ffmpeg"
             max_sessions = 3
             mounts = ["/Volumes/data"]
             log_level = "info"
@@ -223,7 +223,7 @@ mod tests {
         let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
         assert_eq!(
             file_cfg.server_url.as_deref(),
-            Some("ws://10.240.0.1:8096/Cluster/agents/ws")
+            Some("ws://10.240.0.1:8096/Anemone/agents/ws")
         );
         assert_eq!(
             file_cfg.mounts.as_deref(),

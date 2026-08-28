@@ -16,7 +16,7 @@ jobs:
           cargo build --release
       - name: upload agent binary
         run: |
-          mkdir -p dist && cp agent/target/release/jfc-agent agent/target/release/jfc-mock-server dist/
+          mkdir -p dist && cp agent/target/release/polyp agent/target/release/anemone-mock dist/
           ls -la dist
 
   plugin:
@@ -35,6 +35,6 @@ jobs:
           DOTNET_NOLOGO: "1"
         run: |
           export PATH="$HOME/.dotnet:$PATH"
-          dotnet build plugin/jfc.sln -c Release
-          dotnet test plugin/jfc.sln -c Release --no-build
+          dotnet build plugin/anemone.sln -c Release
+          dotnet test plugin/anemone.sln -c Release --no-build
           scripts/package-plugin.sh

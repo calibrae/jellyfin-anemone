@@ -210,7 +210,7 @@ mod tests {
             version: "0.1.0".into(),
             platform: "macos-arm64".into(),
             ffmpeg: FfmpegCaps {
-                path: "/opt/jfc/ffmpeg".into(),
+                path: "/opt/anemone/ffmpeg".into(),
                 version: "7.1.2-Jellyfin".into(),
                 hwaccels: vec!["videotoolbox".into()],
                 encoders: vec!["h264_videotoolbox".into(), "libx264".into()],

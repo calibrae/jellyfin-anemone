@@ -1,15 +1,15 @@
 [package]
-name = "jfc-agent"
+name = "polyp"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "jfc-agent"
+name = "polyp"
 path = "src/main.rs"
 
 [[bin]]
-name = "jfc-mock-server"
-path = "src/bin/jfc-mock-server.rs"
+name = "anemone-mock"
+path = "src/bin/anemone-mock.rs"
 
 [dependencies]
 anyhow = "1.0.104"

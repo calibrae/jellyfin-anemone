@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn check_mount_fails_for_missing_path() {
-        let status = check_mount("/nonexistent/definitely/not/here/jfc-test");
+        let status = check_mount("/nonexistent/definitely/not/here/anemone-test");
         assert!(!status.ok);
     }
 
@@ -300,7 +300,7 @@ mod tests {
     fn tempdir() -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         let unique = format!(
-            "jfc-agent-test-{}-{}",
+            "polyp-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

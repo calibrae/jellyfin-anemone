@@ -1,4 +1,4 @@
-# jellyfincluster — research notes
+# jellyfin-anemone — research notes
 
 Date: 2026-08-28. Target: Jellyfin **10.11.0** on speedwagon (M1 mini, macOS), ~40 users.
 Goal: a Jellyfin plugin that offloads live ffmpeg transcodes to agents on other machines,
@@ -95,7 +95,7 @@ Observed on speedwagon (`encoding.xml`, today's `FFmpeg.Transcode-*.log`):
 
 **Plugin (chosen).**
 - `IPluginServiceRegistrator.RegisterServices(IServiceCollection, IServerApplicationHost)` runs
-  after core registrations (verified on the v10.11.0 tag). `services.AddSingleton<ITranscodeManager, ClusterTranscodeManager>()` wins.
+  after core registrations (verified on the v10.11.0 tag). `services.AddSingleton<ITranscodeManager, AnemoneTranscodeManager>()` wins.
 - `ITranscodeManager` has 10 members. Core `TranscodeManager` is `public sealed`, 757 lines, and
   its job registry is private → **fork it into the plugin** (GPL-2, fine) and change `StartFfMpeg`
   to route. All ctor deps are public interfaces in the `Jellyfin.Controller` NuGet
@@ -181,14 +181,14 @@ Lessons we adopt:
 ```
                     speedwagon (Jellyfin 10.11 + plugin)                    trish / giorno (agent, Rust)
  client ──HLS──▶ DynamicHlsController                                  ┌──────────────────────────────┐
-                    │ builds ffmpeg args (unchanged)                    │ jfc-agent (LaunchDaemon)     │
+                    │ builds ffmpeg args (unchanged)                    │ polyp (LaunchDaemon)     │
                     ▼                                                   │  ├ registers: caps, ffmpeg   │
-              ClusterTranscodeManager  ══ WebSocket (control) ═════════▶│  │   fingerprint, capacity   │
+              AnemoneTranscodeManager  ══ WebSocket (control) ═════════▶│  │   fingerprint, capacity   │
               (fork of TranscodeManager)   job{id,args',token}          │  ├ spawns jellyfin-ffmpeg    │
                     │  ◀───── stderr lines, exit, heartbeat ────────────│  │   stdin ◀ q/p/u  stderr ▶ │
                     │  ─────▶ stdin bytes (q/p/u), kill{id} ───────────▶│  └ kills jobs on disconnect  │
                     │                                                   └──────────────┬───────────────┘
-              /jfc/ingest/{job}/{name}  ◀══ HTTP PUT (chunked, Bearer) ═══ ffmpeg -f hls -method PUT
+              /anemone/ingest/{job}/{name}  ◀══ HTTP PUT (chunked, Bearer) ═══ ffmpeg -f hls -method PUT
                     │ .part + rename → <transcodes>/<md5>N.ts                          │
                     ▼                                                                  ▼ reads
               local transcodes dir  ◀── Jellyfin polls/serves as today      /Volumes/data (SMB from polnareff)
@@ -197,7 +197,7 @@ Lessons we adopt:
 **Job flow**
 1. `StartFfMpeg(state, outputPath, args)` → scheduler picks an agent with free capacity (else local: run
    the upstream code path verbatim).
-2. Rewrite args: `-hls_segment_filename "<dir>/<md5>%d.ts"` → `http://10.240.0.1:8096/jfc/ingest/<job>/%d.ts`;
+2. Rewrite args: `-hls_segment_filename "<dir>/<md5>%d.ts"` → `http://10.240.0.1:8096/anemone/ingest/<job>/%d.ts`;
    playlist → `…/<job>/playlist.m3u8` (receiver discards or stores); prepend `-method PUT -http_persistent 1
    -headers "Authorization: Bearer <token>\r\n"`. Input path unchanged (same mount) or → 
    `http://server/Videos/{itemId}/stream?static=true&mediaSourceId=…&api_key=…` if the agent reports no mount.
@@ -213,7 +213,7 @@ Lessons we adopt:
 M4 Pro) and `active`; pick least `active/max`; server-local counts as an agent with its own cap; optional
 "prefer remote" so speedwagon stays responsive for the 40 users.
 
-**Security v0**: control channel = WebSocket on the plugin's endpoint, shared secret from Vault (`infra/jfc`);
+**Security v0**: control channel = WebSocket on the plugin's endpoint, shared secret from Vault (`infra/anemone`);
 ingest = per-job 256-bit bearer token, LAN/TB only, no path traversal; HTTP-input fallback uses a plugin-minted
 API key. Plain HTTP is acceptable inside the LAN because ffmpeg can't verify TLS here anyway.
 
@@ -263,13 +263,13 @@ inspecting `state` / the args → routed to the upstream local path.
 ## 10. Proposed shape
 
 ```
-jellyfincluster/
-├── plugin/        C# net9.0, Jellyfin.Controller 10.11.x  — Jellyfin.Plugin.Cluster
-│   ├── ClusterTranscodeManager.cs   (fork of TranscodeManager + routing)
+jellyfin-anemone/
+├── plugin/        C# net9.0, Jellyfin.Controller 10.11.x  — Jellyfin.Plugin.Anemone
+│   ├── AnemoneTranscodeManager.cs   (fork of TranscodeManager + routing)
 │   ├── Agents/   registry, WebSocket hub, scheduler
 │   ├── Ingest/   IngestController (PUT segments), token store
 │   └── Configuration/ config page (agents, secret, prefer-remote, caps)
-├── agent/         Rust — jfc-agent: WS client, ffmpeg supervisor, capability probe, LaunchDaemon (SMAppService, fucina pattern)
+├── agent/         Rust — polyp: WS client, ffmpeg supervisor, capability probe, LaunchDaemon (SMAppService, fucina pattern)
 ├── research/      the four reports
 └── .gitea/workflows/ci.yaml   (dotnet on giorno/doppio, cargo on macos-arm64)
 ```

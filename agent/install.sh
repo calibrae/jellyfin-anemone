@@ -1,18 +1,18 @@
 #!/bin/sh
-# Install jfc-agent as a macOS LaunchDaemon. Idempotent -- safe to re-run after rebuilding.
+# Install polyp as a macOS LaunchDaemon. Idempotent -- safe to re-run after rebuilding.
 #
 # Usage: sudo ./install.sh
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN_SRC="$SCRIPT_DIR/target/release/jfc-agent"
-BIN_DST="/usr/local/bin/jfc-agent"
-CONFIG_SRC="$SCRIPT_DIR/jfc-agent.example.toml"
-CONFIG_DST="/etc/jfc-agent.toml"
-PLIST_SRC="$SCRIPT_DIR/launchd/net.calii.jfc-agent.plist"
-PLIST_DST="/Library/LaunchDaemons/net.calii.jfc-agent.plist"
-LOG_DIR="/var/log/jfc-agent"
-LABEL="net.calii.jfc-agent"
+BIN_SRC="$SCRIPT_DIR/target/release/polyp"
+BIN_DST="/usr/local/bin/polyp"
+CONFIG_SRC="$SCRIPT_DIR/polyp.example.toml"
+CONFIG_DST="/etc/polyp.toml"
+PLIST_SRC="$SCRIPT_DIR/launchd/net.calii.polyp.plist"
+PLIST_DST="/Library/LaunchDaemons/net.calii.polyp.plist"
+LOG_DIR="/var/log/polyp"
+LABEL="net.calii.polyp"
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "run as root (sudo ./install.sh)" >&2
@@ -51,7 +51,7 @@ launchctl bootstrap system "$PLIST_DST"
 launchctl enable "system/$LABEL"
 
 echo "done. check status with: sudo launchctl print system/$LABEL"
-echo "logs: $LOG_DIR/jfc-agent.log, $LOG_DIR/jfc-agent.err.log"
+echo "logs: $LOG_DIR/polyp.log, $LOG_DIR/polyp.err.log"
 if grep -q 'CHANGE-ME' "$CONFIG_DST" 2>/dev/null; then
 	echo "warning: $CONFIG_DST still has the placeholder secret -- edit it, then:"
 	echo "  sudo launchctl kickstart -k system/$LABEL"

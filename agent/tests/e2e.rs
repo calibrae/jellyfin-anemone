@@ -1,4 +1,4 @@
-//! End-to-end test: runs the real `jfc-mock-server` and `jfc-agent` binaries against a real
+//! End-to-end test: runs the real `anemone-mock` and `polyp` binaries against a real
 //! local ffmpeg, and checks the ingest output on disk. Skipped (with a clear message printed
 //! to stdout -- run with `cargo test -- --nocapture` to see it) when no local ffmpeg binary can
 //! be found, per the deliverables doc: "/opt/homebrew/bin/ffmpeg if present, else ffmpeg on
@@ -98,10 +98,10 @@ fn spawn_agent(
     secret: &str,
     name: &str,
 ) -> (Child, LineReader, LineReader) {
-    let mut agent = Command::new(env!("CARGO_BIN_EXE_jfc-agent"))
+    let mut agent = Command::new(env!("CARGO_BIN_EXE_polyp"))
         .args([
             "--server-url",
-            &format!("ws://{addr}/Cluster/agents/ws"),
+            &format!("ws://{addr}/Anemone/agents/ws"),
             "--secret",
             secret,
             "--name",
@@ -116,7 +116,7 @@ fn spawn_agent(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn jfc-agent");
+        .expect("spawn polyp");
     let out = LineReader::spawn(agent.stdout.take().unwrap());
     let err = LineReader::spawn(agent.stderr.take().unwrap());
     (agent, out, err)
@@ -142,7 +142,7 @@ fn full_transcode_produces_expected_segments() {
     let out_dir = tempfile::tempdir().expect("tempdir");
     let secret = "e2e-test-secret-1";
 
-    let mut mock = Command::new(env!("CARGO_BIN_EXE_jfc-mock-server"))
+    let mut mock = Command::new(env!("CARGO_BIN_EXE_anemone-mock"))
         .args([
             "--listen",
             "127.0.0.1:0",
@@ -155,13 +155,13 @@ fn full_transcode_produces_expected_segments() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn jfc-mock-server");
+        .expect("spawn anemone-mock");
     let mock_out = LineReader::spawn(mock.stdout.take().unwrap());
     let mock_err = LineReader::spawn(mock.stderr.take().unwrap());
 
     let listen_line = mock_out
         .wait_for(
-            |l| l.contains("jfc-mock-server listening on"),
+            |l| l.contains("anemone-mock listening on"),
             Duration::from_secs(5),
         )
         .unwrap_or_else(|| {
@@ -177,7 +177,7 @@ fn full_transcode_produces_expected_segments() {
 
     let exit_line = mock_out.wait_for(|l| l.starts_with("[exit]"), Duration::from_secs(30));
 
-    let mock_status = mock.wait().expect("wait on jfc-mock-server");
+    let mock_status = mock.wait().expect("wait on anemone-mock");
 
     let _ = agent.kill();
     let _ = agent.wait();
@@ -197,7 +197,7 @@ fn full_transcode_produces_expected_segments() {
     );
     assert!(
         mock_status.success(),
-        "jfc-mock-server (--once) did not exit 0: {mock_status:?}"
+        "anemone-mock (--once) did not exit 0: {mock_status:?}"
     );
 
     let names = list_out_dir_names(out_dir.path());
@@ -271,20 +271,20 @@ fn stdin_q_stops_job_early_with_fewer_segments() {
         "-hls_segment_type",
         "mpegts",
         "-hls_segment_filename",
-        "{ingest}/Cluster/ingest/{id}/qtest%d.ts",
+        "{ingest}/Anemone/ingest/{id}/qtest%d.ts",
         "-method",
         "PUT",
         "-http_persistent",
         "1",
         "-headers",
         "Authorization: Bearer {token}\r\n",
-        "{ingest}/Cluster/ingest/{id}/qtest.m3u8",
+        "{ingest}/Anemone/ingest/{id}/qtest.m3u8",
     ];
     let mut job_file = tempfile::NamedTempFile::new().expect("create job-file tempfile");
     serde_json::to_writer(&mut job_file, &job_file_argv).expect("write job-file JSON");
     job_file.flush().expect("flush job-file");
 
-    let mut mock = Command::new(env!("CARGO_BIN_EXE_jfc-mock-server"))
+    let mut mock = Command::new(env!("CARGO_BIN_EXE_anemone-mock"))
         .args([
             "--listen",
             "127.0.0.1:0",
@@ -299,14 +299,14 @@ fn stdin_q_stops_job_early_with_fewer_segments() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn jfc-mock-server");
+        .expect("spawn anemone-mock");
     let mut mock_stdin = mock.stdin.take().unwrap();
     let mock_out = LineReader::spawn(mock.stdout.take().unwrap());
     let mock_err = LineReader::spawn(mock.stderr.take().unwrap());
 
     let listen_line = mock_out
         .wait_for(
-            |l| l.contains("jfc-mock-server listening on"),
+            |l| l.contains("anemone-mock listening on"),
             Duration::from_secs(5),
         )
         .unwrap_or_else(|| {

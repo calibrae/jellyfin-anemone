@@ -1,4 +1,4 @@
-//! Shared library for the `jfc-agent` daemon and the `jfc-mock-server` test double.
+//! Shared library for the `polyp` daemon and the `anemone-mock` test double.
 //!
 //! See `PROTOCOL.md` at the repo root for the wire protocol these modules implement.
 

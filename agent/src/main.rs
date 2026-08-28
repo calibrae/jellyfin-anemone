@@ -4,10 +4,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use jfc_agent::config::{Cli, Config};
-use jfc_agent::job::JobManager;
-use jfc_agent::probe::{check_mount, probe_ffmpeg};
-use jfc_agent::ws;
+use polyp::config::{Cli, Config};
+use polyp::job::JobManager;
+use polyp::probe::{check_mount, probe_ffmpeg};
+use polyp::ws;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
         server_url = %cfg.server_url,
         ffmpeg = %cfg.ffmpeg,
         max_sessions = cfg.max_sessions,
-        "jfc-agent starting"
+        "polyp starting"
     );
 
     let caps = probe_ffmpeg(&cfg.ffmpeg)
@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     ));
 
     match ws_task.await {
-        Ok(Ok(())) => info!("jfc-agent shut down cleanly"),
+        Ok(Ok(())) => info!("polyp shut down cleanly"),
         Ok(Err(e)) => error!(error = %e, "ws client exited with error"),
         Err(e) => error!(error = %e, "ws task panicked"),
     }

@@ -1,12 +1,12 @@
-# jfc wire protocol v1
+# anemone wire protocol v1
 
-Two channels between the Jellyfin plugin ("server") and each `jfc-agent` ("agent"):
+Two channels between the Jellyfin plugin ("server") and each `polyp` ("agent"):
 
 1. **Control** — one WebSocket per agent, opened *by the agent* to
-   `ws(s)://<jellyfin>/Cluster/agents/ws`, upgrade request carrying `Authorization: Bearer <shared secret>`.
+   `ws(s)://<jellyfin>/Anemone/agents/ws`, upgrade request carrying `Authorization: Bearer <shared secret>`.
    Text frames, one JSON object per frame, `type` discriminator. Either side may send `ping`; the peer answers `pong`.
 2. **Ingest** — ffmpeg on the agent uploads HLS output with `HTTP PUT` to
-   `<ingest_base>/Cluster/ingest/<job_id>/<filename>` carrying `Authorization: Bearer <job token>`
+   `<ingest_base>/Anemone/ingest/<job_id>/<filename>` carrying `Authorization: Bearer <job token>`
    (chunked transfer, one PUT per segment; `-http_persistent 1`). The server writes `<filename>.part` in the job's
    target directory and renames on completion. Filenames are validated against the job's prefix.
 
@@ -56,8 +56,8 @@ Input: Jellyfin's single `commandLineArguments` string. It is split into argv wi
 (`ProcessStartInfo.Arguments` parsing: double quotes group, backslash escapes only before a quote or backslash).
 Then, on the argv list:
 
-1. `-hls_segment_filename <dir>/<prefix>%d<ext>` → `<ingest_base>/Cluster/ingest/<id>/<prefix>%d<ext>`
-2. last element (`<dir>/<prefix>.m3u8`) → `<ingest_base>/Cluster/ingest/<id>/<prefix>.m3u8`
+1. `-hls_segment_filename <dir>/<prefix>%d<ext>` → `<ingest_base>/Anemone/ingest/<id>/<prefix>%d<ext>`
+2. last element (`<dir>/<prefix>.m3u8`) → `<ingest_base>/Anemone/ingest/<id>/<prefix>.m3u8`
 3. insert before the last element: `-method PUT -http_persistent 1 -headers "Authorization: Bearer <token>\r\n"`
    (as three separate argv pairs; the header value contains literal CR LF)
 4. `-i file:<path>` stays as is when the agent reports a mount covering `<path>`; otherwise the job is not
@@ -70,15 +70,15 @@ Then, on the argv list:
 
 ```
 → {"type":"hello","name":"trish","version":"0.1.0","platform":"macos-arm64",
-    "ffmpeg":{"path":"/opt/jfc/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["videotoolbox"],
+    "ffmpeg":{"path":"/opt/anemone/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["videotoolbox"],
               "encoders":["h264_videotoolbox","hevc_videotoolbox","aac_at","libx264"],"decoders":["h264","hevc"],
               "filters":["scale_vt","scale","overlay"]},
     "mounts":[{"path":"/Volumes/data","ok":true}],"max_sessions":3}
 ← {"type":"welcome","server":{"version":"10.11.0","ffmpeg_version":"7.1.2-Jellyfin"},
     "ingest_base":"http://10.240.0.1:8096","ping_interval_s":10}
 ← {"type":"job","id":"5f1c…","argv":["-analyzeduration","200M",…,"-hls_segment_filename",
-    "http://10.240.0.1:8096/Cluster/ingest/5f1c…/a7858c…%d.ts",…,"-method","PUT","-http_persistent","1",
-    "-headers","Authorization: Bearer 9kQ…\r\n","-y","http://10.240.0.1:8096/Cluster/ingest/5f1c…/a7858c….m3u8"],
+    "http://10.240.0.1:8096/Anemone/ingest/5f1c…/a7858c…%d.ts",…,"-method","PUT","-http_persistent","1",
+    "-headers","Authorization: Bearer 9kQ…\r\n","-y","http://10.240.0.1:8096/Anemone/ingest/5f1c…/a7858c….m3u8"],
     "token":"9kQ…","label":"Transcode a7858c…"}
 → {"type":"started","id":"5f1c…","pid":4242}
 → {"type":"stderr","id":"5f1c…","line":"frame=  120 fps= 60 q=-0.0 size=    1024KiB time=00:00:04.00 bitrate=2097.2kbits/s speed=2.0x"}

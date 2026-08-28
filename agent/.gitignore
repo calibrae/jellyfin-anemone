@@ -1,5 +1,5 @@
 # The repo-root .gitignore has an unanchored "bin/" rule (meant for .NET build output under
 # plugin/**/bin/) that would otherwise also match this crate's legitimate src/bin/ directory
-# (src/bin/jfc-mock-server.rs). Un-ignore it explicitly.
+# (src/bin/anemone-mock.rs). Un-ignore it explicitly.
 !/src/bin/
 !/src/bin/**
