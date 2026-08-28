@@ -1,0 +1,11 @@
+ffmpeg version 7.1.2-Jellyfin Copyright (c) 2000-2025 the FFmpeg developers
+built with Apple clang version 17.0.0 (clang-1700.0.13.5)
+configuration: --prefix=/ffbuild/prefix --disable-shared --enable-static --pkg-config-flags=--static --enable-pthreads --cc=clang --host-cflags='-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include -I/opt/ffbuild/prefix/include' --host-ldflags='-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -L/opt/ffbuild/prefix/lib' --extra-version=Jellyfin --extra-cflags=-I/opt/ffbuild/prefix/include --extra-cxxflags= --extra-ldflags=-L/opt/ffbuild/prefix/lib --extra-ldexeflags= --extra-libs= --enable-gpl --enable-version3 --disable-ffplay --disable-debug --disable-doc --disable-sdl2 --enable-lto=thin --disable-libjack --disable-indev=jack --disable-libxcb --disable-xlib --enable-neon --enable-runtime-cpudetect --enable-audiotoolbox --enable-videotoolbox --enable-iconv --enable-zlib --enable-libfreetype --enable-libfribidi --enable-gmp --enable-libxml2 --enable-openssl --enable-lzma --enable-fontconfig --enable-libharfbuzz --enable-libvorbis --enable-opencl --enable-chromaprint --enable-libdav1d --disable-libfdk-aac --enable-libass --enable-libbluray --enable-libmp3lame --enable-libopus --enable-libtheora --enable-libvpx --enable-libwebp --enable-libopenmpt --enable-libsrt --enable-libsvtav1 --enable-libx264 --enable-libx265 --enable-libzimg --enable-libzvbi
+libavutil      59. 39.100 / 59. 39.100
+libavcodec     61. 19.101 / 61. 19.101
+libavformat    61.  7.100 / 61.  7.100
+libavdevice    61.  3.100 / 61.  3.100
+libavfilter    10.  4.100 / 10.  4.100
+libswscale      8.  3.100 /  8.  3.100
+libswresample   5.  3.100 /  5.  3.100
+libpostproc    58.  3.100 / 58.  3.100
