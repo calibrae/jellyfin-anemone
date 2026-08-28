@@ -5,7 +5,7 @@ Target: speedwagon (Jellyfin 10.11.0, `Jellyfin.app`) + trish (M1, 10.240.0.2 ov
 ## 0. Prereqs on trish
 1. `sudo pmset -a sleep 0` (done), Homebrew not required.
 2. jellyfin-ffmpeg: download the official portable build matching the server's 7.1.x
-   (`jellyfin-ffmpeg_7.1.x-y_portable_macarm64-gpl.tar.xz` from https://github.com/jellyfin/jellyfin-ffmpeg/releases),
+   (`jellyfin-ffmpeg_7.1.4-3_portable_macarm64-gpl.tar.xz`, tag `v7.1.4-3` — the last 7.1.x; 8.1.x is for the Jellyfin 12 line — from https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v7.1.4-3),
    unpack to `/opt/jfc/` so `/opt/jfc/ffmpeg -version` prints `ffmpeg version 7.1.x-Jellyfin`. Then
    `xattr -dr com.apple.quarantine /opt/jfc` and run it once by hand. Alternative for a first smoke test: copy
    `/Applications/Jellyfin.app/Contents/MacOS/ffmpeg` from speedwagon (same build the server uses).
