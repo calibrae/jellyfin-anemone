@@ -1,0 +1,13 @@
+{
+  "guid": "7d0c3a4e-2f5b-4c8a-9e1d-6b2f0a9c1e77",
+  "name": "Cluster",
+  "description": "Offload live transcodes to remote ffmpeg agents (jfc-agent); segments stream back over HTTP.",
+  "overview": "Distributed transcoding for Jellyfin without shared storage.",
+  "owner": "cali",
+  "category": "General",
+  "version": "0.1.0.0",
+  "targetAbi": "10.11.0.0",
+  "timestamp": "2026-08-28T00:00:00Z",
+  "changelog": "initial",
+  "assemblies": ["Jellyfin.Plugin.Cluster.dll"]
+}

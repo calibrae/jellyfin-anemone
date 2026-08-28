@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head><title>Cluster</title></head>
+<body>
+<div id="ClusterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+  <div data-role="content"><div class="content-primary">
+    <form id="ClusterConfigForm">
+      <p>Cluster plugin — placeholder config page (replaced by the hub agent).</p>
+      <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
+    </form>
+  </div></div>
+  <script type="text/javascript">
+    (function () {
+      var pluginId = "7d0c3a4e-2f5b-4c8a-9e1d-6b2f0a9c1e77";
+      document.querySelector('#ClusterConfigForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        Dashboard.showLoadingMsg();
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+          ApiClient.updatePluginConfiguration(pluginId, config).then(Dashboard.processPluginConfigurationUpdateResult);
+        });
+        return false;
+      });
+    })();
+  </script>
+</div>
+</body>
+</html>
