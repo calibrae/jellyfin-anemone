@@ -1,0 +1,40 @@
+name: CI
+on: [push]
+
+jobs:
+  agent:
+    runs-on: speedwagon
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo fmt / clippy / test
+        working-directory: agent
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test --release
+          cargo build --release
+      - name: upload agent binary
+        run: |
+          mkdir -p dist && cp agent/target/release/jfc-agent agent/target/release/jfc-mock-server dist/
+          ls -la dist
+
+  plugin:
+    runs-on: speedwagon
+    steps:
+      - uses: actions/checkout@v4
+      - name: ensure .NET 9 SDK (rootless)
+        run: |
+          if [ ! -x "$HOME/.dotnet/dotnet" ]; then
+            curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 9.0 --install-dir "$HOME/.dotnet"
+          fi
+          "$HOME/.dotnet/dotnet" --version
+      - name: build + test
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet build plugin/jfc.sln -c Release
+          dotnet test plugin/jfc.sln -c Release --no-build
+          scripts/package-plugin.sh

@@ -85,3 +85,11 @@ Then, on the argv list:
 ← {"type":"stdin","id":"5f1c…","data":"q\n"}
 → {"type":"exit","id":"5f1c…","code":0}
 ```
+
+## Note on the playlist (verified 2026-08-28)
+
+Jellyfin starts the first ffmpeg for a session with `-hls_playlist_type event` and waits for the **playlist** to
+exist before answering the client; ffmpeg rewrites an *event* playlist after every segment. Seek-restarts use
+`-hls_playlist_type vod` and Jellyfin then waits for the requested **segment** (`state.WaitForPath`); a *vod*
+playlist is only written when ffmpeg finishes. Consequence: the ingest endpoint must store the `.m3u8` PUTs too, not
+just segments — otherwise the initial start hangs.
