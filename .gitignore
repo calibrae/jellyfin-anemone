@@ -6,3 +6,4 @@ target/
 /dist/
 .vs/
 .idea/
+.claude/
