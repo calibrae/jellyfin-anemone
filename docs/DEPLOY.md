@@ -82,3 +82,37 @@ macOS→macOS only; HTTP input fallback not wired (needs the same-path mount).
 | Stop (`DELETE /Videos/ActiveEncodings`) | `stopping remote job … with q command` → agent reports `exited code=0` 2 ms later, graceful |
 | Seek (request segment 150) | job killed and restarted remotely with a new `-start_number`; segment served in 1.2 s |
 | Agent death (`pkill polyp`) | `agent "trish" disconnected`; next transcode ran **locally** with local paths, served in 0.78 s — no user-visible failure |
+
+
+## Running polyp on a macOS agent: two OS constraints (learned the hard way, 2026-09-02)
+
+Both bite *only* when polyp is started by launchd; a polyp started from an ssh session works fine.
+That is why trish currently runs it from a login shell, and the launchd plists are staged but not
+loaded (`~/anemone/launchd-pending/`).
+
+1. **SMB mounts are session-scoped.** A share mounted in an ssh session shows up in `mount` output
+   system-wide, but `open()` on it from a *different* session (a launchd agent, or the system domain)
+   blocks forever in the kernel. Symptom: polyp logs `ffmpeg probe complete` and then nothing at all,
+   with every tokio worker parked and no socket open — it is stuck in `check_mount`. `sample <pid>`
+   shows `probe::check_mount → read_dir → __opendir2 → open$NOCANCEL`. polyp now times the probe out
+   after 5 s and reports the mount as unusable instead of wedging, but the agent still cannot *read
+   media* through a foreign-session mount, so the mount must be made by whatever session runs polyp.
+2. **Local Network privacy blocks launchd-started binaries.** A polyp started by launchd (system or
+   `gui/<uid>` domain) fails every connection with `No route to host (os error 65)` while `nc` from an
+   ssh session on the same host reaches the same port fine. macOS requires Local Network approval, and
+   a background binary has no way to prompt for it. To make the LaunchAgent usable, approve it once in
+   **System Settings → Privacy & Security → Local Network** (enable `polyp`), then:
+   ```sh
+   mv ~/anemone/launchd-pending/*.plist ~/Library/LaunchAgents/
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.calii.anemone-mount.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.calii.polyp.plist
+   ```
+   The mount agent must be bootstrapped in the same domain as polyp, and `/Volumes/data` has to exist
+   and be owned by the user first (`sudo mkdir -p /Volumes/data && sudo chown cali:staff /Volumes/data`) —
+   `/Volumes` is root-owned, and unmounting deletes the mountpoint.
+
+### Current state on trish
+- `/opt/anemone/{ffmpeg,ffprobe}` — jellyfin-ffmpeg 7.1.4-3 portable (macarm64)
+- `/usr/local/bin/polyp`, `/usr/local/bin/anemone-mount.sh`, `/etc/polyp.toml` (0600, cali)
+- polyp started from a login shell; logs at `~/anemone/polyp.log`
+- restart by hand: `ssh trish 'pkill -f "polyp --config"; nohup /usr/local/bin/polyp --config /etc/polyp.toml > ~/anemone/polyp.log 2>&1 &'`

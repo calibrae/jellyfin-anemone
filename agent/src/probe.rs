@@ -133,12 +133,41 @@ pub fn platform_string() -> String {
     format!("{os}-{arch}")
 }
 
+/// How long a mount probe may block before we call the mount unusable.
+const MOUNT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Check a configured mount: exists, is a directory, is readable, and is non-empty. Never
 /// errors — a bad mount is reported via `ok: false`, not a startup failure.
+///
+/// The probe runs on a detached thread with a timeout because opening a wedged network mount can
+/// block **forever** in the kernel, uninterruptibly. Observed live on macOS 2026-09-02: an SMB share
+/// mounted by one session is visible in `mount` output but hangs `open()` for processes in another
+/// session (e.g. a launchd-started agent vs. an ssh session), which silently wedged polyp before it
+/// ever opened its control connection. A hung mount must degrade to `ok: false`, never to a hang.
 pub fn check_mount(path: &str) -> MountStatus {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe_path = path.to_string();
+
+    // Detached on purpose: if the probe is stuck in the kernel it can never be joined.
+    std::thread::spawn(move || {
+        let _ = tx.send(mount_ok(&probe_path));
+    });
+
+    let ok = match rx.recv_timeout(MOUNT_PROBE_TIMEOUT) {
+        Ok(ok) => ok,
+        Err(_) => {
+            tracing::warn!(
+                path,
+                timeout_s = MOUNT_PROBE_TIMEOUT.as_secs(),
+                "mount probe timed out (wedged or foreign-session mount), treating as unusable"
+            );
+            false
+        }
+    };
+
     MountStatus {
         path: path.to_string(),
-        ok: mount_ok(path),
+        ok,
     }
 }
 
@@ -262,6 +291,27 @@ mod tests {
             matches!(arch, "arm64" | "x86_64"),
             "unexpected arch: {arch}"
         );
+    }
+
+    #[test]
+    fn check_mount_times_out_instead_of_hanging() {
+        // A FIFO with no writer makes open() block, standing in for a wedged network mount.
+        let dir = tempdir();
+        let fifo = dir.join("wedged");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: plain libc call with a valid NUL-terminated path.
+        let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "could not create fifo");
+
+        let started = std::time::Instant::now();
+        let status = check_mount(fifo.to_str().unwrap());
+        assert!(!status.ok);
+        assert!(
+            started.elapsed() < MOUNT_PROBE_TIMEOUT + std::time::Duration::from_secs(3),
+            "check_mount blocked for {:?}",
+            started.elapsed()
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
