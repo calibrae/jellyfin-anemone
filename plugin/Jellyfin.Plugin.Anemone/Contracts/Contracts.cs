@@ -16,9 +16,21 @@ public sealed record AgentInfo(
     IReadOnlyList<string> Filters,
     IReadOnlyList<AgentMount> Mounts,
     int MaxSessions,
-    DateTimeOffset ConnectedAt);
+    DateTimeOffset ConnectedAt,
+    string Hwaccel = "none",
+    string? HwaccelDevice = null);
 
-public sealed record AgentMount(string Path, bool Ok);
+/// <summary>
+/// One of an agent's mount points. <paramref name="ServerPath"/> is what the Jellyfin server calls the
+/// same tree (optional on the wire; defaults to <paramref name="Path"/> when the agent's layout is
+/// identical to the server's) - see PROTOCOL.md "Path mapping". Use <see cref="EffectiveServerPath"/>
+/// for placement/rewriting, never <see cref="ServerPath"/> directly, so the default is applied uniformly.
+/// </summary>
+public sealed record AgentMount(string Path, bool Ok, string? ServerPath = null)
+{
+    /// <summary>What the server calls this tree: <see cref="ServerPath"/> when announced, otherwise <see cref="Path"/>.</summary>
+    public string EffectiveServerPath => string.IsNullOrEmpty(ServerPath) ? Path : ServerPath;
+}
 
 /// <summary>What a job needs from an agent, derived from the ffmpeg argv.</summary>
 public sealed record JobRequirements(
@@ -85,8 +97,14 @@ public interface IAgentRegistry
 {
     IReadOnlyList<IAgentConnection> Agents { get; }
 
-    /// <summary>Least-loaded connected agent with free capacity that satisfies the requirements, or null.</summary>
-    IAgentConnection? Pick(JobRequirements requirements);
+    /// <summary>
+    /// Connected, alive, capacity-available agents whose mounts cover <paramref name="requirements"/>'s
+    /// input paths (server-side) and whose ffmpeg version satisfies policy, ordered least-loaded-first.
+    /// Does NOT filter on hwaccel/encoders/decoders/filters - a different-hardware agent can still be a
+    /// candidate because <see cref="Transcoding.HwTranslator"/> may be able to translate the job for it.
+    /// It's the caller's (JobRouter's) job to try each candidate in order and take the first that works.
+    /// </summary>
+    IReadOnlyList<IAgentConnection> Candidates(JobRequirements requirements);
 }
 
 /// <summary>What an ingest bearer token grants: writing files with a given prefix into a given directory.</summary>

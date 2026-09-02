@@ -363,7 +363,7 @@ public sealed class AgentConnection : IAgentConnection
         ActiveJobs = status.Active;
         if (status.Mounts is { Count: > 0 })
         {
-            _info = _info with { Mounts = status.Mounts.Select(m => new AgentMount(m.Path, m.Ok)).ToList() };
+            _info = _info with { Mounts = status.Mounts.Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath)).ToList() };
         }
     }
 

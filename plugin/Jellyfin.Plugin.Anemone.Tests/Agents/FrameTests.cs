@@ -41,6 +41,67 @@ public class FrameTests
         Assert.Single(parsed.Mounts!);
         Assert.Equal("/Volumes/data", parsed.Mounts![0].Path);
         Assert.True(parsed.Mounts[0].Ok);
+        Assert.Null(parsed.Mounts[0].ServerPath);
+        Assert.Null(parsed.Hwaccel);
+        Assert.Null(parsed.HwaccelDevice);
+    }
+
+    [Fact]
+    public void Hello_RoundTrips_WithHwaccelAndMountServerPath()
+    {
+        var frame = new HelloFrame(
+            "polyp-1",
+            "0.2.0",
+            "linux-x86_64",
+            new FfmpegInfoFrame(
+                "/opt/anemone/ffmpeg",
+                "7.1.2-Jellyfin",
+                ["vaapi"],
+                ["h264_vaapi", "hevc_vaapi", "aac"],
+                ["h264", "hevc"],
+                ["scale_vaapi", "volume"]),
+            [new AgentMountFrame("/mnt/media", true, "/Volumes/data")],
+            2,
+            "vaapi",
+            "/dev/dri/renderD128");
+
+        var json = Frame.Serialize(frame);
+
+        Assert.Contains("\"hwaccel\":\"vaapi\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"hwaccel_device\":\"/dev/dri/renderD128\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"server_path\":\"/Volumes/data\"", json, StringComparison.Ordinal);
+
+        var parsed = Assert.IsType<HelloFrame>(Frame.Parse(json));
+        Assert.Equal("vaapi", parsed.Hwaccel);
+        Assert.Equal("/dev/dri/renderD128", parsed.HwaccelDevice);
+        Assert.Single(parsed.Mounts!);
+        Assert.Equal("/mnt/media", parsed.Mounts![0].Path);
+        Assert.Equal("/Volumes/data", parsed.Mounts[0].ServerPath);
+    }
+
+    [Fact]
+    public void Hello_RoundTrips_WithHwaccelAndMountServerPathOmitted()
+    {
+        // Both are optional/backward-compatible per PROTOCOL.md "Protocol v2 additions": an agent that
+        // omits them behaves exactly as before.
+        var frame = new HelloFrame(
+            "trish",
+            "0.1.0",
+            "macos-arm64",
+            new FfmpegInfoFrame("/opt/anemone/ffmpeg", "7.1.2-Jellyfin"),
+            [new AgentMountFrame("/Volumes/data", true)],
+            3);
+
+        var json = Frame.Serialize(frame);
+
+        Assert.DoesNotContain("\"hwaccel\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"hwaccel_device\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"server_path\"", json, StringComparison.Ordinal);
+
+        var parsed = Assert.IsType<HelloFrame>(Frame.Parse(json));
+        Assert.Null(parsed.Hwaccel);
+        Assert.Null(parsed.HwaccelDevice);
+        Assert.Null(parsed.Mounts![0].ServerPath);
     }
 
     [Fact]

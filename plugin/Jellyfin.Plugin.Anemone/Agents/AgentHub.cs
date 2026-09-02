@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.Anemone.Agents.Protocol;
 using Jellyfin.Plugin.Anemone.Contracts;
+using Jellyfin.Plugin.Anemone.Transcoding;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
@@ -12,8 +13,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Anemone.Agents;
 
 /// <summary>
-/// Holds every connected agent and implements placement (<see cref="Pick"/>). Also owns the hello/welcome
-/// handshake for newly accepted WebSockets (<see cref="RunConnectionAsync"/>), called from
+/// Holds every connected agent and implements placement (<see cref="Candidates"/>). Also owns the
+/// hello/welcome handshake for newly accepted WebSockets (<see cref="RunConnectionAsync"/>), called from
 /// <see cref="AgentWebSocketController"/>.
 /// </summary>
 public sealed class AgentHub : IAgentRegistry
@@ -87,19 +88,26 @@ public sealed class AgentHub : IAgentRegistry
             return;
         }
 
+        var ffmpegHwaccels = hello.Ffmpeg!.Hwaccels ?? Array.Empty<string>();
+        var hwaccel = string.IsNullOrWhiteSpace(hello.Hwaccel)
+            ? HwTranslator.InferProfile(ffmpegHwaccels, hello.Platform)
+            : hello.Hwaccel;
+
         var info = new AgentInfo(
             hello.Name,
             hello.Version ?? string.Empty,
             hello.Platform ?? string.Empty,
-            hello.Ffmpeg!.Path ?? string.Empty,
+            hello.Ffmpeg.Path ?? string.Empty,
             hello.Ffmpeg.Version,
-            hello.Ffmpeg.Hwaccels ?? Array.Empty<string>(),
+            ffmpegHwaccels,
             hello.Ffmpeg.Encoders ?? Array.Empty<string>(),
             hello.Ffmpeg.Decoders ?? Array.Empty<string>(),
             hello.Ffmpeg.Filters ?? Array.Empty<string>(),
-            (hello.Mounts ?? Array.Empty<AgentMountFrame>()).Select(m => new AgentMount(m.Path, m.Ok)).ToList(),
+            (hello.Mounts ?? Array.Empty<AgentMountFrame>()).Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath)).ToList(),
             hello.MaxSessions,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            hwaccel,
+            hello.HwaccelDevice);
 
         if (_agents.TryRemove(hello.Name, out var existing))
         {
@@ -146,7 +154,7 @@ public sealed class AgentHub : IAgentRegistry
         }
     }
 
-    public IAgentConnection? Pick(JobRequirements requirements)
+    public IReadOnlyList<IAgentConnection> Candidates(JobRequirements requirements)
     {
         ArgumentNullException.ThrowIfNull(requirements);
 
@@ -155,15 +163,20 @@ public sealed class AgentHub : IAgentRegistry
         var requireMatchingFfmpeg = config?.RequireMatchingFfmpeg ?? true;
         var serverFfmpegVersion = _mediaEncoder.EncoderVersion?.ToString();
 
-        return PickFrom(_agents.Values, requirements, DateTimeOffset.UtcNow, deadAfter, requireMatchingFfmpeg, serverFfmpegVersion, _logger);
+        return CandidatesFrom(_agents.Values, requirements, DateTimeOffset.UtcNow, deadAfter, requireMatchingFfmpeg, serverFfmpegVersion, _logger);
     }
 
     /// <summary>
-    /// Pure placement algorithm, factored out of <see cref="Pick"/> so it can be unit-tested against
+    /// Pure placement algorithm, factored out of <see cref="Candidates"/> so it can be unit-tested against
     /// hand-written fake <see cref="IAgentConnection"/>s without a live registry. See RESEARCH.md §6
-    /// "Scheduling v0" and PROTOCOL.md's argument-rewriting rule 4/5 for the requirements this checks.
+    /// "Scheduling v0" and PROTOCOL.md "Path mapping" for the mount-coverage rule this checks.
+    ///
+    /// Deliberately does NOT filter on hwaccel/encoders/decoders/filters: with per-agent hardware
+    /// translation, an agent whose raw capability lists don't match the server's own can still run the job
+    /// once <see cref="Transcoding.HwTranslator"/> rewrites it. That's <see cref="Transcoding.JobRouter"/>'s
+    /// job, tried in the least-loaded-first order this returns.
     /// </summary>
-    internal static IAgentConnection? PickFrom(
+    internal static IReadOnlyList<IAgentConnection> CandidatesFrom(
         IEnumerable<IAgentConnection> agents,
         JobRequirements requirements,
         DateTimeOffset now,
@@ -178,8 +191,7 @@ public sealed class AgentHub : IAgentRegistry
             logger?.LogDebug("anemone: server ffmpeg version unknown ('{Raw}'); skipping ffmpeg version match check", serverFfmpegVersion);
         }
 
-        IAgentConnection? best = null;
-        var bestRatio = double.MaxValue;
+        var candidates = new List<(IAgentConnection Agent, double Ratio)>();
 
         foreach (var agent in agents)
         {
@@ -198,30 +210,6 @@ public sealed class AgentHub : IAgentRegistry
             if (agent.Info.MaxSessions <= 0 || agent.ActiveJobs >= agent.Info.MaxSessions)
             {
                 logger?.LogDebug("anemone: excluding agent {Name}: at capacity ({Active}/{Max})", agent.Info.Name, agent.ActiveJobs, agent.Info.MaxSessions);
-                continue;
-            }
-
-            if (!HasAll(agent.Info.Hwaccels, requirements.Hwaccels, out var missingHw))
-            {
-                logger?.LogDebug("anemone: excluding agent {Name}: missing hwaccel '{Missing}'", agent.Info.Name, missingHw);
-                continue;
-            }
-
-            if (!HasAll(agent.Info.Encoders, requirements.Encoders, out var missingEnc))
-            {
-                logger?.LogDebug("anemone: excluding agent {Name}: missing encoder '{Missing}'", agent.Info.Name, missingEnc);
-                continue;
-            }
-
-            if (!HasAll(agent.Info.Decoders, requirements.Decoders, out var missingDec))
-            {
-                logger?.LogDebug("anemone: excluding agent {Name}: missing decoder '{Missing}'", agent.Info.Name, missingDec);
-                continue;
-            }
-
-            if (!HasAll(agent.Info.Filters, requirements.Filters, out var missingFilter))
-            {
-                logger?.LogDebug("anemone: excluding agent {Name}: missing filter '{Missing}'", agent.Info.Name, missingFilter);
                 continue;
             }
 
@@ -245,18 +233,15 @@ public sealed class AgentHub : IAgentRegistry
                 }
             }
 
-            var ratio = (double)agent.ActiveJobs / agent.Info.MaxSessions;
-            if (best is null
-                || ratio < bestRatio
-                || (ratio == bestRatio && agent.ActiveJobs < best.ActiveJobs)
-                || (ratio == bestRatio && agent.ActiveJobs == best.ActiveJobs && agent.LastSeen > best.LastSeen))
-            {
-                best = agent;
-                bestRatio = ratio;
-            }
+            candidates.Add((agent, (double)agent.ActiveJobs / agent.Info.MaxSessions));
         }
 
-        return best;
+        return candidates
+            .OrderBy(c => c.Ratio)
+            .ThenBy(c => c.Agent.ActiveJobs)
+            .ThenByDescending(c => c.Agent.LastSeen)
+            .Select(c => c.Agent)
+            .ToList();
     }
 
     /// <summary>Absolute base URL agents should reach this server on, trimmed of a trailing slash.</summary>
@@ -354,47 +339,16 @@ public sealed class AgentHub : IAgentRegistry
         }
     }
 
-    private static bool HasAll(IReadOnlyList<string> available, IReadOnlyList<string> required, out string? missing)
-    {
-        missing = null;
-        foreach (var r in required)
-        {
-            var found = false;
-            foreach (var a in available)
-            {
-                if (string.Equals(a, r, StringComparison.OrdinalIgnoreCase))
-                {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                missing = r;
-                return false;
-            }
-        }
-
-        return true;
-    }
-
+    /// <summary>
+    /// True when every input path is covered by an <c>ok</c> mount on a path-segment boundary, matched
+    /// against each mount's <see cref="AgentMount.EffectiveServerPath"/> (see PROTOCOL.md "Path mapping").
+    /// </summary>
     private static bool MountsCover(IReadOnlyList<AgentMount> mounts, IReadOnlyList<string> inputPaths, out string? uncovered)
     {
         uncovered = null;
         foreach (var input in inputPaths)
         {
-            var covered = false;
-            foreach (var mount in mounts)
-            {
-                if (mount.Ok && IsUnderMount(input, mount.Path))
-                {
-                    covered = true;
-                    break;
-                }
-            }
-
-            if (!covered)
+            if (MountPathMapper.FindLongestMatch(mounts, input) is null)
             {
                 uncovered = input;
                 return false;
@@ -402,23 +356,6 @@ public sealed class AgentHub : IAgentRegistry
         }
 
         return true;
-    }
-
-    private static bool IsUnderMount(string path, string mountPath)
-    {
-        var mount = mountPath.TrimEnd('/', '\\');
-        if (mount.Length == 0 || !path.StartsWith(mount, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (path.Length == mount.Length)
-        {
-            return true;
-        }
-
-        var next = path[mount.Length];
-        return next is '/' or '\\';
     }
 
     private static string? ParseMajorMinor(string? version)

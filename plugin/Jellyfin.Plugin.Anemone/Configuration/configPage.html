@@ -85,6 +85,14 @@
                     <div class="fieldDescription checkboxFieldDescription">Require an agent's ffmpeg major.minor version to match this server's before routing jobs to it.</div>
                 </div>
 
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="AllowHwProfileTranslation" />
+                        <span>Allow hardware-profile translation</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">Route jobs to agents with different hardware (e.g. a Linux/VAAPI or NVENC box behind a VideoToolbox server) by translating the ffmpeg command line. When off, only agents whose hwaccel profile already matches the source are eligible.</div>
+                </div>
+
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block"><span>Save</span></button>
                 </div>
@@ -100,13 +108,14 @@
                                 <th class="tableColumn">Platform</th>
                                 <th class="tableColumn">ffmpeg</th>
                                 <th class="tableColumn">Hwaccels</th>
+                                <th class="tableColumn">Hw profile</th>
                                 <th class="tableColumn">Active/Max</th>
-                                <th class="tableColumn">Mounts</th>
+                                <th class="tableColumn">Mounts (server path -&gt; agent path)</th>
                                 <th class="tableColumn">Last seen</th>
                             </tr>
                         </thead>
                         <tbody id="AnemoneAgentsTableBody">
-                            <tr><td colspan="7">No agents connected.</td></tr>
+                            <tr><td colspan="8">No agents connected.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -148,6 +157,7 @@
                     page.querySelector("#AgentStartTimeoutSeconds").value = config.AgentStartTimeoutSeconds;
                     page.querySelector("#AgentDeadAfterSeconds").value = config.AgentDeadAfterSeconds;
                     page.querySelector("#RequireMatchingFfmpeg").checked = !!config.RequireMatchingFfmpeg;
+                    page.querySelector("#AllowHwProfileTranslation").checked = !!config.AllowHwProfileTranslation;
                     Dashboard.hideLoadingMsg();
                 });
             }
@@ -165,6 +175,7 @@
                     config.AgentStartTimeoutSeconds = parseInt(page.querySelector("#AgentStartTimeoutSeconds").value, 10) || 0;
                     config.AgentDeadAfterSeconds = parseInt(page.querySelector("#AgentDeadAfterSeconds").value, 10) || 0;
                     config.RequireMatchingFfmpeg = page.querySelector("#RequireMatchingFfmpeg").checked;
+                    config.AllowHwProfileTranslation = page.querySelector("#AllowHwProfileTranslation").checked;
 
                     ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
@@ -197,17 +208,25 @@
                 var agents = pick(status, "Agents", "agents") || [];
 
                 if (!agents.length) {
-                    body.innerHTML = '<tr><td colspan="7">No agents connected.</td></tr>';
+                    body.innerHTML = '<tr><td colspan="8">No agents connected.</td></tr>';
                     return;
                 }
 
                 var rows = agents.map(function (a) {
                     var mounts = (pick(a, "Mounts", "mounts") || []).map(function (m) {
                         var ok = pick(m, "Ok", "ok");
-                        return (ok ? "✓ " : "✗ ") + escapeHtml(pick(m, "Path", "path"));
+                        var serverPath = pick(m, "ServerPath", "serverPath");
+                        var path = pick(m, "Path", "path");
+                        var label = serverPath && serverPath !== path
+                            ? escapeHtml(serverPath) + " &rarr; " + escapeHtml(path)
+                            : escapeHtml(path);
+                        return (ok ? "✓ " : "✗ ") + label;
                     }).join("<br/>");
 
                     var hwaccels = (pick(a, "Hwaccels", "hwaccels") || []).join(", ");
+                    var hwProfile = pick(a, "Hwaccel", "hwaccel") || "none";
+                    var hwDevice = pick(a, "HwaccelDevice", "hwaccelDevice");
+                    var hwProfileLabel = hwDevice ? hwProfile + " (" + hwDevice + ")" : hwProfile;
                     var connected = pick(a, "Connected", "connected");
                     var nameSuffix = connected ? "" : " (disconnected)";
                     var active = pick(a, "ActiveJobs", "activeJobs");
@@ -218,6 +237,7 @@
                         "<td>" + escapeHtml(pick(a, "Platform", "platform")) + "</td>" +
                         "<td>" + escapeHtml(pick(a, "FfmpegVersion", "ffmpegVersion")) + "</td>" +
                         "<td>" + escapeHtml(hwaccels) + "</td>" +
+                        "<td>" + escapeHtml(hwProfileLabel) + "</td>" +
                         "<td>" + escapeHtml(active) + "/" + escapeHtml(max) + "</td>" +
                         "<td>" + (mounts || "&#8212;") + "</td>" +
                         "<td>" + secondsAgoText(pick(a, "LastSeen", "lastSeen")) + "</td>" +

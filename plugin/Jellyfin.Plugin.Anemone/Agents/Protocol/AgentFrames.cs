@@ -11,17 +11,29 @@ public sealed record FfmpegInfoFrame(
     IReadOnlyList<string>? Decoders = null,
     IReadOnlyList<string>? Filters = null);
 
-/// <summary>One mount entry inside <see cref="HelloFrame"/> / <see cref="StatusFrame"/>.</summary>
-public sealed record AgentMountFrame(string Path, bool Ok);
+/// <summary>
+/// One mount entry inside <see cref="HelloFrame"/> / <see cref="StatusFrame"/>. <paramref name="ServerPath"/>
+/// is what the Jellyfin server calls the same tree; absent (null) when identical to <paramref name="Path"/>.
+/// See PROTOCOL.md "Path mapping".
+/// </summary>
+public sealed record AgentMountFrame(string Path, bool Ok, string? ServerPath = null);
 
-/// <summary>First frame an agent sends after connecting. Server answers <see cref="WelcomeFrame"/> or <see cref="RejectFrame"/>.</summary>
+/// <summary>
+/// First frame an agent sends after connecting. Server answers <see cref="WelcomeFrame"/> or <see cref="RejectFrame"/>.
+/// <paramref name="Hwaccel"/> is the hardware-acceleration profile the agent wants its jobs built for
+/// (<c>videotoolbox|nvenc|qsv|vaapi|amf|rkmpp|none</c>); when absent the server infers it from
+/// <c>ffmpeg.hwaccels</c> + <paramref name="Platform"/> (see <see cref="Transcoding.HwTranslator.InferProfile"/>).
+/// <paramref name="HwaccelDevice"/> is the device the profile needs (e.g. <c>/dev/dri/renderD128</c> for VAAPI/QSV).
+/// </summary>
 public sealed record HelloFrame(
     string Name,
     string Version,
     string Platform,
     FfmpegInfoFrame Ffmpeg,
     IReadOnlyList<AgentMountFrame>? Mounts,
-    int MaxSessions) : Frame
+    int MaxSessions,
+    string? Hwaccel = null,
+    string? HwaccelDevice = null) : Frame
 {
     public string Type => "hello";
 }
