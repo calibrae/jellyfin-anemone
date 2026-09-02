@@ -225,19 +225,34 @@ async fn run_job(
         }
     };
 
-    // Drain whatever stderr the process wrote right before exiting.
-    loop {
-        match stderr.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                for line in splitter.feed(&buf[..n]) {
-                    let _ = out_tx.send(AgentMessage::Stderr {
-                        id: id.clone(),
-                        line,
-                    });
+    // Drain whatever stderr the process wrote right before exiting -- but only briefly. Reading to EOF
+    // waits for every holder of the pipe's write end to drop it, and the process we just reaped is not
+    // necessarily the last one: anything it spawned inherits that pipe. Killing `sh -c "sleep 30"` on a
+    // Debian agent is exactly this, because dash forks `sleep` instead of exec'ing it, so SIGKILL reaps
+    // the shell and the orphaned `sleep` holds stderr open for its full 30s. Without a bound the job task
+    // would block there forever, never emit `exit`, and never release its capacity slot -- an agent would
+    // quietly stop accepting work. macOS hides this: its /bin/sh execs, so the pipe closes with the child.
+    let drain = async {
+        loop {
+            match stderr.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    for line in splitter.feed(&buf[..n]) {
+                        let _ = out_tx.send(AgentMessage::Stderr {
+                            id: id.clone(),
+                            line,
+                        });
+                    }
                 }
             }
         }
+    };
+
+    if tokio::time::timeout(STDERR_DRAIN_TIMEOUT, drain)
+        .await
+        .is_err()
+    {
+        debug!(id = %id, "stderr still held open after exit (orphaned grandchild?), stopping the drain");
     }
     if let Some(last) = splitter.flush() {
         let _ = out_tx.send(AgentMessage::Stderr {
@@ -298,6 +313,10 @@ fn signal_name(sig: i32) -> &'static str {
         _ => "unknown",
     }
 }
+
+/// How long to keep draining a finished job's stderr before giving up. Bounded because a grandchild that
+/// outlived the process still holds the pipe open; see the drain site for the concrete case.
+const STDERR_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[cfg(test)]
 mod tests {
@@ -513,5 +532,41 @@ mod tests {
         let _exit = recv_matching(&mut out_rx, |m| matches!(m, AgentMessage::Exit { .. })).await;
         active_rx.changed().await.unwrap();
         assert_eq!(*active_rx.borrow(), 0);
+    }
+
+    // Regression: killing a process whose grandchild still holds the stderr pipe must still report an
+    // exit. /bin/sh forks (rather than execs) `sleep` on Debian's dash, so SIGKILL leaves the sleep
+    // holding stderr; before the drain was bounded, this hung forever and the job never released its slot.
+    #[tokio::test]
+    async fn exit_is_reported_even_when_a_grandchild_holds_stderr_open() {
+        let (mgr, _active_rx) = JobManager::new("/bin/sh".to_string(), 3);
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+        mgr.spawn(
+            JobSpec {
+                // the subshell keeps stderr open past the parent's death on every platform
+                id: "orphan".into(),
+                argv: vec!["-c".into(), "sleep 30 & sleep 30".into()],
+                label: "orphan".into(),
+                env: None,
+            },
+            out_tx,
+        );
+        let _ = recv_matching(&mut out_rx, |m| matches!(m, AgentMessage::Started { .. })).await;
+
+        mgr.kill_all();
+
+        let exit = recv_matching(&mut out_rx, |m| matches!(m, AgentMessage::Exit { .. })).await;
+        match exit {
+            AgentMessage::Exit { id, code, .. } => {
+                assert_eq!(id, "orphan");
+                assert_eq!(code, -1);
+            }
+            other => panic!("expected Exit, got {other:?}"),
+        }
+        assert_eq!(
+            mgr.active_count(),
+            0,
+            "the job must release its capacity slot"
+        );
     }
 }
