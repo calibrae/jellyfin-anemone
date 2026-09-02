@@ -22,7 +22,27 @@ max_sessions = 3
 
 # Paths that must be readable for this agent to accept jobs that read from them (e.g. an SMB
 # mount shared with the Jellyfin server). A bad/missing mount is reported, not fatal.
+#
+# Bare strings mean the path is identical on this agent and on the Jellyfin server:
 mounts = ["/Volumes/data"]
+#
+# When the tree lives at a different path on this agent than what Jellyfin calls it (e.g. this
+# agent NFS-mounts the same media tree at a different path than the server's SMB mount), use the
+# table form instead -- `server_path` is what the server calls it, and defaults to `path` if
+# omitted. The two forms can be mixed in one `mounts` list.
+# [[mounts]]
+# path = "/mnt/media"           # where the tree lives on THIS agent
+# server_path = "/Volumes/data" # what the Jellyfin server calls the same tree
+
+# Hardware-acceleration profile this agent's ffmpeg jobs should be built for:
+# videotoolbox, nvenc, qsv, vaapi, amf, rkmpp, or none (software only, e.g. libx264).
+# Auto-detected when omitted (from ffmpeg's -hwaccels plus the local machine's hardware);
+# "none" is a valid, useful answer -- a fast CPU with no usable GPU still helps.
+# hwaccel = "vaapi"
+
+# Device the hwaccel profile needs, e.g. /dev/dri/renderD128 for vaapi/qsv on Linux. Defaults to
+# the auto-detected render node when applicable (unset for videotoolbox/nvenc/none).
+# hwaccel_device = "/dev/dri/renderD128"
 
 # trace, debug, info, warn, error. Defaults to "info". RUST_LOG overrides this if set.
 log_level = "info"

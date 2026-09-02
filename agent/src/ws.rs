@@ -19,7 +19,9 @@ use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::job::{JobManager, JobSpec};
-use crate::protocol::{peek_frame_type, AgentMessage, FfmpegCaps, MountStatus, ServerMessage};
+use crate::protocol::{
+    peek_frame_type, AgentMessage, FfmpegCaps, HwAccel, MountStatus, ServerMessage,
+};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -27,10 +29,13 @@ const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_STATUS_INTERVAL_S: u64 = 10;
 
 /// Drive the reconnect loop until `shutdown` is cancelled.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     cfg: Config,
     caps: FfmpegCaps,
     mounts: Vec<MountStatus>,
+    hwaccel: HwAccel,
+    hwaccel_device: Option<String>,
     job_manager: JobManager,
     mut active_rx: watch::Receiver<u32>,
     shutdown: CancellationToken,
@@ -42,6 +47,8 @@ pub async fn run(
             &cfg,
             &caps,
             &mounts,
+            hwaccel,
+            hwaccel_device.as_deref(),
             &job_manager,
             &mut active_rx,
             &shutdown,
@@ -80,10 +87,13 @@ enum ConnOutcome {
     NeverConnected,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connect_and_serve(
     cfg: &Config,
     caps: &FfmpegCaps,
     mounts: &[MountStatus],
+    hwaccel: HwAccel,
+    hwaccel_device: Option<&str>,
     job_manager: &JobManager,
     active_rx: &mut watch::Receiver<u32>,
     shutdown: &CancellationToken,
@@ -134,6 +144,8 @@ async fn connect_and_serve(
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: crate::probe::platform_string(),
         ffmpeg: caps.clone(),
+        hwaccel: Some(hwaccel),
+        hwaccel_device: hwaccel_device.map(|s| s.to_string()),
         mounts: mounts.to_vec(),
         max_sessions: job_manager.max_sessions(),
     };

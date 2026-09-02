@@ -114,7 +114,9 @@ pub fn parse_flagged_list(text: &str, header: &str) -> Vec<String> {
 }
 
 /// Build this agent's platform string: `macos-arm64`, `macos-x86_64`, `linux-x86_64`,
-/// `linux-aarch64`, ...
+/// `linux-aarch64`, ... Arch naming follows each OS's own `uname -m` convention -- macOS calls
+/// Apple Silicon `arm64`, Linux calls the same architecture `aarch64` -- so the two are *not*
+/// unified into one arch string across OSes.
 pub fn platform_string() -> String {
     let os = if cfg!(target_os = "macos") {
         "macos"
@@ -123,8 +125,16 @@ pub fn platform_string() -> String {
     } else {
         std::env::consts::OS
     };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
+    let arch = if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else if cfg!(target_arch = "x86_64") {
+            "x86_64"
+        } else {
+            std::env::consts::ARCH
+        }
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
     } else if cfg!(target_arch = "x86_64") {
         "x86_64"
     } else {
@@ -168,6 +178,7 @@ pub fn check_mount(path: &str) -> MountStatus {
     MountStatus {
         path: path.to_string(),
         ok,
+        server_path: None,
     }
 }
 
@@ -288,9 +299,13 @@ mod tests {
         let (os, arch) = p.split_once('-').expect("platform string has a dash");
         assert!(matches!(os, "macos" | "linux"), "unexpected os: {os}");
         assert!(
-            matches!(arch, "arm64" | "x86_64"),
+            matches!(arch, "arm64" | "x86_64" | "aarch64"),
             "unexpected arch: {arch}"
         );
+        // Linux's arm64 is spelled "aarch64" (its own `uname -m`), never "arm64".
+        if os == "linux" {
+            assert_ne!(arch, "arm64", "linux arch must be aarch64, not arm64");
+        }
     }
 
     #[test]
@@ -364,15 +379,31 @@ mod tests {
 
     #[tokio::test]
     async fn probe_ffmpeg_end_to_end_if_available() {
-        let candidates = [
+        // Common macOS install spots first, then fall back to whatever `ffmpeg` PATH resolves
+        // to (typical on Linux, e.g. /usr/bin/ffmpeg).
+        let fixed_candidates = [
             "/opt/homebrew/bin/ffmpeg",
             "/Applications/Jellyfin.app/Contents/MacOS/ffmpeg",
         ];
-        let Some(path) = candidates.iter().find(|p| std::path::Path::new(p).exists()) else {
+        let path = if let Some(p) = fixed_candidates
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+        {
+            p.to_string()
+        } else if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            "ffmpeg".to_string()
+        } else {
             eprintln!("skipping: no local ffmpeg binary found");
             return;
         };
-        let caps = probe_ffmpeg(path).await.expect("probe should succeed");
+        let caps = probe_ffmpeg(&path).await.expect("probe should succeed");
         assert!(!caps.version.is_empty());
         assert!(!caps.encoders.is_empty());
         assert!(!caps.decoders.is_empty());

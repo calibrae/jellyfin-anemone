@@ -1,0 +1,22 @@
+[Unit]
+Description=polyp - jellyfin-anemone transcode agent
+After=network-online.target
+Wants=network-online.target
+# If a configured mount (e.g. an NFS/SMB mount matching one of `mounts[].path` in polyp.toml)
+# must be up before polyp starts, add RequiresMountsFor so systemd orders us after the mount
+# unit instead of racing it, e.g.:
+#   RequiresMountsFor=/mnt/media
+# (repeat the key, or space-separate several paths on one line, for more than one mount)
+
+[Service]
+# Run as a dedicated, unprivileged user rather than root -- it only needs read access to the
+# configured mounts. Create it first if it doesn't exist:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin polyp
+User=polyp
+Group=polyp
+ExecStart=/usr/local/bin/polyp --config /etc/polyp.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,7 @@
 //! See `PROTOCOL.md` at the repo root for the wire protocol these modules implement.
 
 pub mod config;
+pub mod hwaccel;
 pub mod job;
 pub mod probe;
 pub mod protocol;

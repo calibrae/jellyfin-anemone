@@ -58,8 +58,46 @@ SIGTERM/SIGINT trigger a graceful shutdown: kill all jobs, close the socket, exi
 | `name` | no | machine's short hostname | reported in `hello` |
 | `ffmpeg` | no | `ffmpeg` (resolved via `PATH`) | path to jellyfin-ffmpeg |
 | `max_sessions` | no | `3` | concurrent transcode cap |
-| `mounts` | no | `[]` | paths that must be readable, e.g. an SMB mount shared with the Jellyfin server |
+| `mounts` | no | `[]` | paths that must be readable, e.g. an SMB/NFS mount shared with the Jellyfin server -- see below |
+| `hwaccel` | no | auto-detected | `videotoolbox`/`nvenc`/`qsv`/`vaapi`/`amf`/`rkmpp`/`none` -- see below |
+| `hwaccel_device` | no | auto-detected for vaapi/qsv | e.g. `/dev/dri/renderD128` |
 | `log_level` | no | `info` | `trace`/`debug`/`info`/`warn`/`error`; `RUST_LOG` overrides this |
+
+#### `mounts`: path mapping (protocol v2)
+
+Each entry is either a bare string (the tree is at the same path on this agent and on the
+Jellyfin server) or a table with `path` (where the tree lives on this agent) and an optional
+`server_path` (what the Jellyfin server calls the same tree, defaulting to `path`):
+
+```toml
+mounts = ["/Volumes/data"]                # identical layout
+```
+```toml
+[[mounts]]
+path = "/mnt/media"                       # where the tree lives on THIS agent
+server_path = "/Volumes/data"             # what the Jellyfin server calls the same tree
+```
+
+The two forms can be mixed in one list. `--mounts a,b` on the CLI always means identical paths
+(no `server_path` mapping) and, when given, replaces the config file's `mounts` entirely. The
+agent's mount-readability probe always checks `path` (the agent-local one); path mapping/argv
+rewriting for job placement is the server's job, per `PROTOCOL.md`.
+
+#### `hwaccel` / `hwaccel_device`: hardware acceleration (protocol v2)
+
+The plugin builds ffmpeg command lines for *the server's own* hardware and translates the
+hardware-specific parts for whichever agent runs the job, based on what that agent reports in
+`hello`. When `hwaccel` is left unset the agent auto-detects at startup (logged as `hwaccel
+resolved`):
+- macOS: `videotoolbox` if ffmpeg reports it in `-hwaccels`, else `none`.
+- Linux: `vaapi` if a DRI render node exists (`/dev/dri/renderD128`, or the first
+  `/dev/dri/renderD*`) and ffmpeg reports `vaapi`; else `nvenc` if ffmpeg reports `cuda` and an
+  NVIDIA GPU looks present (`/dev/nvidia0` or a working `nvidia-smi`); else `qsv` if ffmpeg
+  reports `qsv` and a render node exists; else `none`.
+
+`hwaccel_device` defaults to the render node found during vaapi/qsv detection and is otherwise
+unset; set it explicitly to pin a specific GPU on a multi-GPU box. `none` is a valid, useful
+answer -- a fast CPU with no usable GPU still helps, it just gets `libx264`.
 
 ### Where jellyfin-ffmpeg comes from
 
@@ -185,6 +223,27 @@ sudo ./uninstall.sh -c    # also remove /etc/polyp.toml
 
 Both scripts are idempotent.
 
+## Packaging (Linux systemd)
+
+```sh
+cargo build --release
+sudo ./install-linux.sh    # creates the `polyp` system user if missing, copies the binary, an
+                            # example config (if none exists), and the unit; enables + starts it
+```
+
+Then edit `/etc/polyp.toml` (installed with the placeholder secret from `polyp.example.toml`)
+and:
+
+```sh
+sudo systemctl restart polyp
+```
+
+Logs: `journalctl -u polyp -f`. The unit (`systemd/polyp.service`) runs as an unprivileged
+`polyp` user and restarts on failure (`Restart=always`, `RestartSec=5`); if one of the
+configured mounts needs to be up before polyp starts, add `RequiresMountsFor=<path>` to it (see
+the comment in the unit file). `install-linux.sh` is idempotent and, like `install.sh`, refuses
+to clobber an existing `/etc/polyp.toml`.
+
 ## Crate layout
 
 ```
@@ -193,6 +252,7 @@ agent/
     main.rs      -- polyp entry point: config, probe, signal handling, wires ws.rs + job.rs
     config.rs     -- CLI (clap) + TOML file config, merged with CLI precedence
     probe.rs      -- ffmpeg -version/-hwaccels/-encoders/-decoders/-filters parsers, mount checks
+    hwaccel.rs     -- hwaccel auto-detection (pure decision fn) + /dev/dri, nvidia-smi probes
     protocol.rs    -- wire frame types (serde), stderr line splitter, ingest filename validation
     ws.rs          -- control WebSocket client: handshake, dispatch, status/ping, reconnect backoff
     job.rs          -- job supervisor: spawn/stdin/kill/exit per job, capacity enforcement
@@ -203,6 +263,9 @@ agent/
     fixtures/      -- captured ffmpeg -version/-hwaccels/-encoders/-decoders/-filters output
   launchd/
     net.calii.polyp.plist
-  install.sh / uninstall.sh
+  systemd/
+    polyp.service
+  install.sh / uninstall.sh           -- macOS (LaunchDaemon)
+  install-linux.sh                     -- Linux (systemd)
   polyp.example.toml
 ```

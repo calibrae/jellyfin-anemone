@@ -6,10 +6,16 @@
 //!    [`validate_ingest_filename`] for the filename rule the server (and our mock server) applies.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 /// Frames sent by the agent to the server.
+// `Hello` is naturally the largest variant (it carries the full ffmpeg capability probe); these
+// frames are constructed a handful of times per connection, not a hot path worth boxing fields
+// over.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentMessage {
@@ -18,6 +24,10 @@ pub enum AgentMessage {
         version: String,
         platform: String,
         ffmpeg: FfmpegCaps,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hwaccel: Option<HwAccel>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hwaccel_device: Option<String>,
         mounts: Vec<MountStatus>,
         max_sessions: u32,
     },
@@ -94,6 +104,64 @@ pub struct FfmpegCaps {
 pub struct MountStatus {
     pub path: String,
     pub ok: bool,
+    /// What the Jellyfin server calls this same tree, when it differs from `path` (protocol v2,
+    /// see `PROTOCOL.md` "Path mapping"). Omitted on the wire when equal to `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_path: Option<String>,
+}
+
+/// Hardware-acceleration profile an agent's ffmpeg jobs should be built for (protocol v2, see
+/// `PROTOCOL.md` "Hardware acceleration"). `None` is a valid, useful answer: a fast CPU with no
+/// usable GPU still helps, it just gets `libx264`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HwAccel {
+    Videotoolbox,
+    Nvenc,
+    Qsv,
+    Vaapi,
+    Amf,
+    Rkmpp,
+    None,
+}
+
+impl HwAccel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HwAccel::Videotoolbox => "videotoolbox",
+            HwAccel::Nvenc => "nvenc",
+            HwAccel::Qsv => "qsv",
+            HwAccel::Vaapi => "vaapi",
+            HwAccel::Amf => "amf",
+            HwAccel::Rkmpp => "rkmpp",
+            HwAccel::None => "none",
+        }
+    }
+}
+
+impl fmt::Display for HwAccel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for HwAccel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "videotoolbox" => Ok(HwAccel::Videotoolbox),
+            "nvenc" => Ok(HwAccel::Nvenc),
+            "qsv" => Ok(HwAccel::Qsv),
+            "vaapi" => Ok(HwAccel::Vaapi),
+            "amf" => Ok(HwAccel::Amf),
+            "rkmpp" => Ok(HwAccel::Rkmpp),
+            "none" => Ok(HwAccel::None),
+            other => Err(format!(
+                "invalid hwaccel {other:?} (expected one of: videotoolbox, nvenc, qsv, vaapi, amf, rkmpp, none)"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -217,16 +285,134 @@ mod tests {
                 decoders: vec!["h264".into(), "hevc".into()],
                 filters: vec!["scale_vt".into(), "scale".into(), "overlay".into()],
             },
+            hwaccel: None,
+            hwaccel_device: None,
             mounts: vec![MountStatus {
                 path: "/Volumes/data".into(),
                 ok: true,
+                server_path: None,
             }],
             max_sessions: 3,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"hello\""));
+        // "hwaccels" (ffmpeg's reported list) legitimately appears; the top-level "hwaccel"/
+        // "hwaccel_device" keys (both None here) must not.
+        assert!(!json.contains("\"hwaccel\":"));
+        assert!(!json.contains("\"hwaccel_device\":"));
         let back: AgentMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn round_trip_hello_with_hwaccel_and_server_path() {
+        let msg = AgentMessage::Hello {
+            name: "doppio".into(),
+            version: "0.2.0".into(),
+            platform: "linux-x86_64".into(),
+            ffmpeg: FfmpegCaps {
+                path: "/opt/anemone/ffmpeg".into(),
+                version: "7.1.2-Jellyfin".into(),
+                hwaccels: vec!["vaapi".into()],
+                encoders: vec!["h264_vaapi".into(), "libx264".into()],
+                decoders: vec!["h264".into(), "hevc".into()],
+                filters: vec!["scale_vaapi".into(), "scale".into()],
+            },
+            hwaccel: Some(HwAccel::Vaapi),
+            hwaccel_device: Some("/dev/dri/renderD128".into()),
+            mounts: vec![MountStatus {
+                path: "/mnt/media".into(),
+                ok: true,
+                server_path: Some("/Volumes/data".into()),
+            }],
+            max_sessions: 3,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"hwaccel\":\"vaapi\""));
+        assert!(json.contains("\"hwaccel_device\":\"/dev/dri/renderD128\""));
+        assert!(json.contains("\"server_path\":\"/Volumes/data\""));
+        let back: AgentMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn hello_without_v2_fields_still_parses() {
+        // A v1-shaped hello (no hwaccel/hwaccel_device on the frame, no server_path on a mount)
+        // must still deserialize cleanly -- protocol v2 additions are backward compatible.
+        let text = r#"{"type":"hello","name":"trish","version":"0.1.0","platform":"macos-arm64",
+            "ffmpeg":{"path":"/opt/anemone/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["videotoolbox"],
+                      "encoders":["h264_videotoolbox"],"decoders":["h264"],"filters":["scale_vt"]},
+            "mounts":[{"path":"/Volumes/data","ok":true}],"max_sessions":3}"#;
+        let msg: AgentMessage = serde_json::from_str(text).expect("v1 hello should still parse");
+        match msg {
+            AgentMessage::Hello {
+                hwaccel,
+                hwaccel_device,
+                mounts,
+                ..
+            } => {
+                assert_eq!(hwaccel, None);
+                assert_eq!(hwaccel_device, None);
+                assert_eq!(mounts[0].server_path, None);
+            }
+            other => panic!("expected Hello, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mount_status_omits_server_path_when_none() {
+        let m = MountStatus {
+            path: "/Volumes/data".into(),
+            ok: true,
+            server_path: None,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(json, r#"{"path":"/Volumes/data","ok":true}"#);
+    }
+
+    #[test]
+    fn mount_status_includes_server_path_when_set() {
+        let m = MountStatus {
+            path: "/mnt/media".into(),
+            ok: true,
+            server_path: Some("/Volumes/data".into()),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(
+            json,
+            r#"{"path":"/mnt/media","ok":true,"server_path":"/Volumes/data"}"#
+        );
+    }
+
+    #[test]
+    fn hwaccel_from_str_round_trips_all_variants() {
+        for hw in [
+            HwAccel::Videotoolbox,
+            HwAccel::Nvenc,
+            HwAccel::Qsv,
+            HwAccel::Vaapi,
+            HwAccel::Amf,
+            HwAccel::Rkmpp,
+            HwAccel::None,
+        ] {
+            let s = hw.to_string();
+            let back: HwAccel = s.parse().unwrap();
+            assert_eq!(hw, back);
+        }
+    }
+
+    #[test]
+    fn hwaccel_from_str_rejects_garbage() {
+        assert!("bogus".parse::<HwAccel>().is_err());
+    }
+
+    #[test]
+    fn hwaccel_serde_uses_lowercase_names() {
+        assert_eq!(serde_json::to_string(&HwAccel::Vaapi).unwrap(), "\"vaapi\"");
+        assert_eq!(
+            serde_json::from_str::<HwAccel>("\"nvenc\"").unwrap(),
+            HwAccel::Nvenc
+        );
     }
 
     #[test]
@@ -250,6 +436,7 @@ mod tests {
             mounts: Some(vec![MountStatus {
                 path: "/Volumes/data".into(),
                 ok: false,
+                server_path: None,
             }]),
         };
         let json = serde_json::to_string(&msg).unwrap();
