@@ -42,7 +42,9 @@ On startup the agent:
    not a startup failure.
 3. Connects to `server_url`, sends `hello`, and waits for `welcome` or `reject`.
 4. On `welcome`, starts sending `status` every `ping_interval_s` (or 10s) and on every job-count
-   change, and starts accepting `job` frames up to `max_sessions` concurrent.
+   change, and starts accepting `job` frames up to `max_sessions` concurrent. Each `status` frame
+   carries a fresh `load` sample (host load average, normalized by CPU count, clamped to 0..1;
+   omitted when it can't be read on this platform).
 
 On disconnect (server closes the socket, network drop, or `reject`), every running job is
 SIGKILLed immediately -- per `PROTOCOL.md`, job liveness is control-connection liveness -- and the
@@ -270,6 +272,7 @@ agent/
     probe.rs      -- ffmpeg -version/-hwaccels/-encoders/-decoders/-filters parsers, mount checks
     hwaccel.rs     -- hwaccel auto-detection (pure decision fn) + /dev/dri, nvidia-smi probes
     mount_local.rs -- mounts[].local detection (pure classifier) + statfs/mountinfo probes
+    load.rs        -- status.load sampling (pure normalization) + /proc/loadavg, getloadavg probes
     protocol.rs    -- wire frame types (serde), stderr line splitter, ingest filename validation
     ws.rs          -- control WebSocket client: handshake, dispatch, status/ping, reconnect backoff
     job.rs          -- job supervisor: spawn/stdin/kill/exit per job, capacity enforcement

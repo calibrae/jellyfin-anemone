@@ -293,7 +293,7 @@ async fn serve_connection(
 fn send_status(out_tx: &mpsc::UnboundedSender<AgentMessage>, job_manager: &JobManager) {
     let _ = out_tx.send(AgentMessage::Status {
         active: job_manager.active_count(),
-        load: None,
+        load: crate::load::sample(),
         mounts: None,
     });
 }

@@ -5,6 +5,7 @@
 pub mod config;
 pub mod hwaccel;
 pub mod job;
+pub mod load;
 pub mod mount_local;
 pub mod probe;
 pub mod protocol;
