@@ -215,6 +215,8 @@ async fn handle_agent_socket(socket: WebSocket, state: AppState) {
         version,
         platform,
         ffmpeg,
+        hwaccel,
+        hwaccel_device,
         mounts,
         max_sessions,
     } = hello.expect("checked above")
@@ -231,6 +233,7 @@ async fn handle_agent_socket(socket: WebSocket, state: AppState) {
         ffmpeg.decoders.len(),
         ffmpeg.filters.len()
     );
+    println!("  hwaccel:     {hwaccel:?} (device: {hwaccel_device:?})");
     println!("  mounts:      {mounts:?}");
     println!("  max_sessions:{max_sessions}");
 

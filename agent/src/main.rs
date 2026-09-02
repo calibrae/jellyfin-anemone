@@ -5,8 +5,9 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use polyp::config::{Cli, Config};
+use polyp::hwaccel::{self, DetectInputs};
 use polyp::job::JobManager;
-use polyp::probe::{check_mount, probe_ffmpeg};
+use polyp::probe::{check_mount, platform_string, probe_ffmpeg};
 use polyp::ws;
 
 #[tokio::main]
@@ -36,14 +37,40 @@ async fn main() -> Result<()> {
         "ffmpeg probe complete"
     );
 
-    let mounts: Vec<_> = cfg.mounts.iter().map(|m| check_mount(m)).collect();
+    let mounts: Vec<_> = cfg
+        .mounts
+        .iter()
+        .map(|m| {
+            let mut status = check_mount(&m.path);
+            if m.server_path != m.path {
+                status.server_path = Some(m.server_path.clone());
+            }
+            status
+        })
+        .collect();
     for m in &mounts {
         if m.ok {
-            info!(path = %m.path, "mount ok");
+            info!(path = %m.path, server_path = ?m.server_path, "mount ok");
         } else {
-            warn!(path = %m.path, "mount not ok (will still start)");
+            warn!(path = %m.path, server_path = ?m.server_path, "mount not ok (will still start)");
         }
     }
+
+    let platform = platform_string();
+    let detect_inputs = DetectInputs {
+        platform: platform.clone(),
+        hwaccels: caps.hwaccels.clone(),
+        render_nodes: hwaccel::probe_render_nodes(),
+        nvidia_present: hwaccel::probe_nvidia_present(),
+    };
+    let (hwaccel_val, hwaccel_device, hwaccel_reason) =
+        hwaccel::resolve(cfg.hwaccel, cfg.hwaccel_device.clone(), &detect_inputs);
+    info!(
+        hwaccel = %hwaccel_val,
+        hwaccel_device = ?hwaccel_device,
+        reason = %hwaccel_reason,
+        "hwaccel resolved"
+    );
 
     let (job_manager, active_rx) = JobManager::new(cfg.ffmpeg.clone(), cfg.max_sessions);
 
@@ -54,6 +81,8 @@ async fn main() -> Result<()> {
         cfg,
         caps,
         mounts,
+        hwaccel_val,
+        hwaccel_device,
         job_manager,
         active_rx,
         shutdown.clone(),

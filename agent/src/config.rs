@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
+use crate::protocol::HwAccel;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "polyp",
@@ -37,13 +39,62 @@ pub struct Cli {
     #[arg(long)]
     pub max_sessions: Option<u32>,
 
-    /// Mount paths that must be readable (comma-separated, or repeat the flag).
+    /// Mount paths that must be readable (comma-separated, or repeat the flag). CLI mounts
+    /// always mean an identical path on the agent and the server -- use the config file's
+    /// `[[mounts]]` table form to declare a `server_path` mapping.
     #[arg(long, value_delimiter = ',')]
     pub mounts: Option<Vec<String>>,
+
+    /// Hardware-acceleration profile: videotoolbox, nvenc, qsv, vaapi, amf, rkmpp, or none.
+    /// Auto-detected when unset.
+    #[arg(long)]
+    pub hwaccel: Option<String>,
+
+    /// Device the hwaccel profile needs, e.g. /dev/dri/renderD128 for vaapi/qsv on Linux.
+    /// Defaults to the auto-detected render node when applicable.
+    #[arg(long)]
+    pub hwaccel_device: Option<String>,
 
     /// Log level: trace, debug, info, warn, error. Also honors RUST_LOG.
     #[arg(long)]
     pub log_level: Option<String>,
+}
+
+/// One `mounts` entry in the TOML file: either a bare string (identical path on agent and
+/// server, the pre-v2 shape) or a table with an optional `server_path` mapping.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+enum MountEntry {
+    Simple(String),
+    Full {
+        path: String,
+        #[serde(default)]
+        server_path: Option<String>,
+    },
+}
+
+impl MountEntry {
+    fn into_spec(self) -> MountSpec {
+        match self {
+            MountEntry::Simple(path) => MountSpec {
+                server_path: path.clone(),
+                path,
+            },
+            MountEntry::Full { path, server_path } => {
+                let server_path = server_path.unwrap_or_else(|| path.clone());
+                MountSpec { path, server_path }
+            }
+        }
+    }
+}
+
+/// A configured mount, resolved to the pair the wire protocol wants: `path` (where the tree
+/// lives on this agent) and `server_path` (what the Jellyfin server calls the same tree,
+/// defaulting to `path` when the layout is identical).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountSpec {
+    pub path: String,
+    pub server_path: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,7 +104,9 @@ struct FileConfig {
     name: Option<String>,
     ffmpeg: Option<String>,
     max_sessions: Option<u32>,
-    mounts: Option<Vec<String>>,
+    mounts: Option<Vec<MountEntry>>,
+    hwaccel: Option<String>,
+    hwaccel_device: Option<String>,
     log_level: Option<String>,
 }
 
@@ -64,7 +117,9 @@ pub struct Config {
     pub name: String,
     pub ffmpeg: String,
     pub max_sessions: u32,
-    pub mounts: Vec<String>,
+    pub mounts: Vec<MountSpec>,
+    pub hwaccel: Option<HwAccel>,
+    pub hwaccel_device: Option<String>,
     pub log_level: String,
 }
 
@@ -103,7 +158,30 @@ impl Config {
             .max_sessions
             .or(file_cfg.max_sessions)
             .unwrap_or(DEFAULT_MAX_SESSIONS);
-        let mounts = cli.mounts.clone().or(file_cfg.mounts).unwrap_or_default();
+        // CLI mounts always mean an identical path on the agent and the server; the config
+        // file's table form is the only way to set `server_path`.
+        let mounts: Vec<MountSpec> = match &cli.mounts {
+            Some(paths) => paths
+                .iter()
+                .map(|p| MountSpec {
+                    path: p.clone(),
+                    server_path: p.clone(),
+                })
+                .collect(),
+            None => file_cfg
+                .mounts
+                .map(|entries| entries.into_iter().map(MountEntry::into_spec).collect())
+                .unwrap_or_default(),
+        };
+        let hwaccel = match cli.hwaccel.clone().or(file_cfg.hwaccel) {
+            Some(s) => Some(
+                s.parse::<HwAccel>()
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| "invalid hwaccel in config/CLI".to_string())?,
+            ),
+            None => None,
+        };
+        let hwaccel_device = cli.hwaccel_device.clone().or(file_cfg.hwaccel_device);
         let log_level = cli
             .log_level
             .clone()
@@ -117,6 +195,8 @@ impl Config {
             ffmpeg,
             max_sessions,
             mounts,
+            hwaccel,
+            hwaccel_device,
             log_level,
         })
     }
@@ -153,6 +233,8 @@ mod tests {
             ffmpeg: None,
             max_sessions: None,
             mounts: None,
+            hwaccel: None,
+            hwaccel_device: None,
             log_level: None,
         }
     }
@@ -227,7 +309,170 @@ mod tests {
         );
         assert_eq!(
             file_cfg.mounts.as_deref(),
-            Some(&["/Volumes/data".to_string()][..])
+            Some(&[MountEntry::Simple("/Volumes/data".to_string())][..])
         );
+    }
+
+    // --- mount shapes ---
+
+    #[test]
+    fn bare_string_mount_round_trips_with_matching_server_path() {
+        let toml_text = r#"mounts = ["/Volumes/data"]"#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![MountSpec {
+                path: "/Volumes/data".into(),
+                server_path: "/Volumes/data".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn table_mount_with_explicit_server_path() {
+        let toml_text = r#"
+            [[mounts]]
+            path = "/mnt/media"
+            server_path = "/Volumes/data"
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![MountSpec {
+                path: "/mnt/media".into(),
+                server_path: "/Volumes/data".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn table_mount_without_server_path_defaults_to_path() {
+        let toml_text = r#"
+            [[mounts]]
+            path = "/mnt/media"
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![MountSpec {
+                path: "/mnt/media".into(),
+                server_path: "/mnt/media".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn mixed_bare_string_and_table_mounts() {
+        let toml_text = r#"mounts = ["/Volumes/data", { path = "/mnt/media", server_path = "/Volumes/other" }]"#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![
+                MountSpec {
+                    path: "/Volumes/data".into(),
+                    server_path: "/Volumes/data".into(),
+                },
+                MountSpec {
+                    path: "/mnt/media".into(),
+                    server_path: "/Volumes/other".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_mounts_mean_identical_paths_and_override_file() {
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        cli.mounts = Some(vec!["/a".into(), "/b".into()]);
+        let file_cfg = FileConfig {
+            mounts: Some(vec![MountEntry::Full {
+                path: "/mnt/media".into(),
+                server_path: Some("/Volumes/data".into()),
+            }]),
+            ..Default::default()
+        };
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![
+                MountSpec {
+                    path: "/a".into(),
+                    server_path: "/a".into(),
+                },
+                MountSpec {
+                    path: "/b".into(),
+                    server_path: "/b".into(),
+                },
+            ]
+        );
+    }
+
+    // --- hwaccel ---
+
+    #[test]
+    fn hwaccel_unset_by_default() {
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, FileConfig::default()).unwrap();
+        assert_eq!(cfg.hwaccel, None);
+        assert_eq!(cfg.hwaccel_device, None);
+    }
+
+    #[test]
+    fn hwaccel_parsed_from_file() {
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let file_cfg = FileConfig {
+            hwaccel: Some("vaapi".into()),
+            hwaccel_device: Some("/dev/dri/renderD128".into()),
+            ..Default::default()
+        };
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(cfg.hwaccel, Some(HwAccel::Vaapi));
+        assert_eq!(cfg.hwaccel_device.as_deref(), Some("/dev/dri/renderD128"));
+    }
+
+    #[test]
+    fn hwaccel_cli_overrides_file() {
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        cli.hwaccel = Some("none".into());
+        let file_cfg = FileConfig {
+            hwaccel: Some("vaapi".into()),
+            ..Default::default()
+        };
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(cfg.hwaccel, Some(HwAccel::None));
+    }
+
+    #[test]
+    fn invalid_hwaccel_errors() {
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        cli.hwaccel = Some("bogus".into());
+        let err = Config::merge(&cli, FileConfig::default()).unwrap_err();
+        assert!(err.to_string().contains("hwaccel"));
     }
 }
