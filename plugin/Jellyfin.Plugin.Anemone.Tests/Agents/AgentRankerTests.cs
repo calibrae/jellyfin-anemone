@@ -109,10 +109,12 @@ public class AgentRankerTests
     [Fact]
     public void Score_ExactValues_MatchTheDocumentedWeights()
     {
-        // Pins the formula itself: locality +/-1.5, throughput (speed-1.0)*1.0, spare*1.0, load*-0.5.
+        // Pins the formula itself: locality +/-0.75, throughput clamp(log2(speed))*1.0, spare*1.0,
+        // load*-0.5. Throughput is logarithmic because a realtime factor is unbounded and job-dependent;
+        // see AgentRankerCrossoverTests for the locality-vs-speed trade-off these weights encode.
         var result = AgentRanker.Score(new AgentRankingInput("pinned", true, 2.0, 0.75, 0.4));
 
-        Assert.Equal(1.5 + (1.0 * 1.0) + (0.75 * 1.0) + (-0.4 * 0.5), result.Score, precision: 9);
+        Assert.Equal(0.75 + (Math.Log2(2.0) * 1.0) + (0.75 * 1.0) + (-0.4 * 0.5), result.Score, precision: 9);
     }
 
     [Fact]

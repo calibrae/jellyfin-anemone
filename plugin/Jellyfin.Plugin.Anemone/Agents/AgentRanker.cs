@@ -51,13 +51,37 @@ public sealed record AgentRankingResult(double Score, string Reason);
 /// </summary>
 public static class AgentRanker
 {
-    private const double LocalityWeight = 1.5;
+    // Locality and throughput are deliberately balanced so that a network-mounted agent must be roughly
+    // 3x faster to outrank one holding the media locally: two idle agents differ by 2 x LocalityWeight
+    // (1.5), and the throughput term reaches that at log2(speed) = 1.5, i.e. ~2.8x. LocalityCrossoverSpeed
+    // states that in one place, and a test pins it, so changing these weights is a deliberate act rather
+    // than an accident.
+    private const double LocalityWeight = 0.75;
     private const double ThroughputWeight = 1.0;
     private const double CapacityWeight = 1.0;
     private const double LoadWeight = 0.5;
 
-    /// <summary>Realtime factor treated as "neither ahead nor behind" - the baseline <see cref="ThroughputWeight"/> is scaled around.</summary>
+    /// <summary>
+    /// Realtime factor a job needs just to keep up with a viewer. Speeds are scored relative to this.
+    /// </summary>
     private const double ThroughputBaseline = 1.0;
+
+    /// <summary>
+    /// Cap on the throughput term, in both directions. Measured speed is a realtime FACTOR, so it is
+    /// unbounded (agents here routinely report 15x-50x) and it is not comparable across jobs: the same
+    /// machine reports a far higher figure transcoding 480p than 4K, so an agent that happened to draw easy
+    /// work would otherwise look permanently superior. Compressed logarithmically and clamped, the term
+    /// answers the question that actually matters - "meaningfully faster, or not?" - and stays in the same
+    /// range as the other signals instead of swamping them. It also stops the ranking chasing speed that
+    /// buys the viewer nothing: past a few times realtime, a transcode is already ahead of playback.
+    /// </summary>
+    private const double ThroughputClamp = 2.0;
+
+    /// <summary>
+    /// The speed advantage at which a network-mounted agent ties with an otherwise identical agent that
+    /// has the media locally. Derived from the weights above; asserted by a test.
+    /// </summary>
+    internal const double LocalityCrossoverSpeed = 2.8284271247461903; // 2^(2*LocalityWeight/ThroughputWeight)
 
     /// <summary>Scores one candidate. Pure: same input always yields the same output.</summary>
     public static AgentRankingResult Score(AgentRankingInput input)
@@ -71,8 +95,9 @@ public static class AgentRanker
             null => 0.0,
         };
 
-        var throughputTerm = input.MeasuredSpeed is { } speed
-            ? (speed - ThroughputBaseline) * ThroughputWeight
+        // log2 of the ratio: 2x the baseline scores +1, 4x scores +2, half of it scores -1 - then clamped.
+        var throughputTerm = input.MeasuredSpeed is { } speed && speed > 0
+            ? Math.Clamp(Math.Log2(speed / ThroughputBaseline), -ThroughputClamp, ThroughputClamp) * ThroughputWeight
             : 0.0;
 
         var capacityTerm = input.SpareCapacityFraction * CapacityWeight;
