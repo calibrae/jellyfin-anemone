@@ -64,139 +64,158 @@ public class AgentHubPickTests
         };
     }
 
-    [Fact]
-    public void Pick_ReturnsNull_WhenNoAgents()
-    {
-        var picked = AgentHub.PickFrom([], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+    private static IAgentConnection? PickBest(IEnumerable<IAgentConnection> agents, JobRequirements requirements, DateTimeOffset now, TimeSpan deadAfter, bool requireMatchingFfmpeg, string? serverFfmpegVersion)
+        => AgentHub.CandidatesFrom(agents, requirements, now, deadAfter, requireMatchingFfmpeg, serverFfmpegVersion).FirstOrDefault();
 
-        Assert.Null(picked);
+    [Fact]
+    public void Candidates_ReturnsEmpty_WhenNoAgents()
+    {
+        var candidates = AgentHub.CandidatesFrom([], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_ExcludesAgentAtCapacity()
+    public void Candidates_ExcludesAgentAtCapacity()
     {
         var full = MakeAgent("full", maxSessions: 2, activeJobs: 2);
 
-        var picked = AgentHub.PickFrom([full], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([full], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_ExcludesDeadAgent()
+    public void Candidates_ExcludesDeadAgent()
     {
         var now = DateTimeOffset.UtcNow;
         var dead = MakeAgent("dead", lastSeen: now - TimeSpan.FromMinutes(5));
 
-        var picked = AgentHub.PickFrom([dead], NoRequirements, now, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([dead], NoRequirements, now, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_ExcludesDisconnectedAgent()
+    public void Candidates_ExcludesDisconnectedAgent()
     {
         var disconnected = MakeAgent("gone", isConnected: false);
 
-        var picked = AgentHub.PickFrom([disconnected], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([disconnected], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_ExcludesAgentMissingHwaccel()
+    public void Candidates_DoesNotExcludeAgentMissingHwaccel()
     {
+        // Placement no longer filters on hwaccel/encoders/decoders/filters - a different-hardware agent
+        // is still a candidate, because JobRouter + HwTranslator may be able to translate the job for it.
+        // (Before protocol v2 this agent would have been excluded here; now that's HwTranslator's call.)
         var agent = MakeAgent("no-vt", hwaccels: []);
         var requirements = new JobRequirements(["videotoolbox"], [], [], [], []);
 
-        var picked = AgentHub.PickFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Same(agent, Assert.Single(candidates));
     }
 
     [Fact]
-    public void Pick_IncludesAgentWithRequiredHwaccel_CaseInsensitive()
+    public void Candidates_DoesNotExcludeAgentMissingEncoders()
     {
-        var agent = MakeAgent("vt", hwaccels: ["VideoToolbox"]);
-        var requirements = new JobRequirements(["videotoolbox"], [], [], [], []);
+        var agent = MakeAgent("no-h264-vt", encoders: []);
+        var requirements = new JobRequirements([], ["h264_videotoolbox"], [], [], []);
 
-        var picked = AgentHub.PickFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Same(agent, picked);
+        Assert.Same(agent, Assert.Single(candidates));
     }
 
     [Fact]
-    public void Pick_ExcludesAgent_WhenInputPathNotUnderAnOkMount()
+    public void Candidates_ExcludesAgent_WhenInputPathNotUnderAnOkMount()
     {
         // /Volumes/data covers /Volumes/data/x.mkv but must NOT cover /Volumes/database/x.mkv (prefix must
         // land on a directory boundary, not just a string prefix).
         var agent = MakeAgent("has-data-mount", mounts: [new AgentMount("/Volumes/data", true)]);
         var requirements = new JobRequirements([], [], [], [], ["/Volumes/database/x.mkv"]);
 
-        var picked = AgentHub.PickFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_IncludesAgent_WhenInputPathIsUnderMount()
+    public void Candidates_IncludesAgent_WhenInputPathIsUnderMount()
     {
         var agent = MakeAgent("has-data-mount", mounts: [new AgentMount("/Volumes/data", true)]);
         var requirements = new JobRequirements([], [], [], [], ["/Volumes/data/x.mkv"]);
 
-        var picked = AgentHub.PickFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Same(agent, picked);
+        Assert.Same(agent, Assert.Single(candidates));
     }
 
     [Fact]
-    public void Pick_ExcludesAgent_WhenMountIsNotOk()
+    public void Candidates_ExcludesAgent_WhenMountIsNotOk()
     {
         var agent = MakeAgent("broken-mount", mounts: [new AgentMount("/Volumes/data", false)]);
         var requirements = new JobRequirements([], [], [], [], ["/Volumes/data/x.mkv"]);
 
-        var picked = AgentHub.PickFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_ExcludesAgent_OnFfmpegMajorMinorMismatch()
+    public void Candidates_IncludesAgent_WhenInputPathIsUnderMountsServerPath()
+    {
+        // server_path is what the SERVER calls the tree; path is where the agent has it mounted. Coverage
+        // must be checked against server_path, not path.
+        var agent = MakeAgent("mapped-mount", mounts: [new AgentMount("/mnt/media", true, "/Volumes/data")]);
+        var requirements = new JobRequirements([], [], [], [], ["/Volumes/data/x.mkv"]);
+
+        var candidates = AgentHub.CandidatesFrom([agent], requirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+
+        Assert.Same(agent, Assert.Single(candidates));
+    }
+
+    [Fact]
+    public void Candidates_ExcludesAgent_OnFfmpegMajorMinorMismatch()
     {
         var agent = MakeAgent("old-ffmpeg", ffmpegVersion: "7.0.1-Jellyfin");
 
-        var picked = AgentHub.PickFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, "7.1.2-Jellyfin");
+        var candidates = AgentHub.CandidatesFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, "7.1.2-Jellyfin");
 
-        Assert.Null(picked);
+        Assert.Empty(candidates);
     }
 
     [Fact]
-    public void Pick_IncludesAgent_OnFfmpegMajorMinorMatch()
+    public void Candidates_IncludesAgent_OnFfmpegMajorMinorMatch()
     {
         var agent = MakeAgent("same-ffmpeg", ffmpegVersion: "7.1.9-Jellyfin");
 
-        var picked = AgentHub.PickFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, "7.1.2-Jellyfin");
+        var candidates = AgentHub.CandidatesFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, "7.1.2-Jellyfin");
 
-        Assert.Same(agent, picked);
+        Assert.Same(agent, Assert.Single(candidates));
     }
 
     [Fact]
-    public void Pick_SkipsFfmpegCheck_WhenServerVersionUnknown()
+    public void Candidates_SkipsFfmpegCheck_WhenServerVersionUnknown()
     {
         var agent = MakeAgent("whatever-ffmpeg", ffmpegVersion: "9.9.9");
 
-        var picked = AgentHub.PickFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, null);
+        var candidates = AgentHub.CandidatesFrom([agent], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), true, null);
 
-        Assert.Same(agent, picked);
+        Assert.Same(agent, Assert.Single(candidates));
     }
 
     [Fact]
-    public void Pick_ChoosesLeastLoadedByRatio()
+    public void Candidates_OrdersLeastLoadedByRatioFirst()
     {
         var moreLoadedByRatio = MakeAgent("b", maxSessions: 2, activeJobs: 1); // ratio 0.5
         var lessLoadedByRatio = MakeAgent("a", maxSessions: 4, activeJobs: 1); // ratio 0.25
 
-        var picked = AgentHub.PickFrom(
+        var candidates = AgentHub.CandidatesFrom(
             [moreLoadedByRatio, lessLoadedByRatio],
             NoRequirements,
             DateTimeOffset.UtcNow,
@@ -204,16 +223,16 @@ public class AgentHubPickTests
             false,
             null);
 
-        Assert.Same(lessLoadedByRatio, picked);
+        Assert.Equal([lessLoadedByRatio, moreLoadedByRatio], candidates);
     }
 
     [Fact]
-    public void Pick_TieBreaksOnLowerActiveJobCount()
+    public void Candidates_TieBreaksOnLowerActiveJobCount()
     {
         var moreActive = MakeAgent("more", maxSessions: 4, activeJobs: 2); // ratio 0.5
         var lessActive = MakeAgent("less", maxSessions: 2, activeJobs: 1); // ratio 0.5
 
-        var picked = AgentHub.PickFrom(
+        var candidates = AgentHub.CandidatesFrom(
             [moreActive, lessActive],
             NoRequirements,
             DateTimeOffset.UtcNow,
@@ -221,18 +240,29 @@ public class AgentHubPickTests
             false,
             null);
 
-        Assert.Same(lessActive, picked);
+        Assert.Equal([lessActive, moreActive], candidates);
     }
 
     [Fact]
-    public void Pick_TieBreaksOnMostRecentlySeen()
+    public void Candidates_TieBreaksOnMostRecentlySeen()
     {
         var now = DateTimeOffset.UtcNow;
         var older = MakeAgent("older", maxSessions: 2, activeJobs: 1, lastSeen: now - TimeSpan.FromSeconds(20));
         var newer = MakeAgent("newer", maxSessions: 2, activeJobs: 1, lastSeen: now - TimeSpan.FromSeconds(1));
 
-        var picked = AgentHub.PickFrom([older, newer], NoRequirements, now, TimeSpan.FromSeconds(30), false, null);
+        var candidates = AgentHub.CandidatesFrom([older, newer], NoRequirements, now, TimeSpan.FromSeconds(30), false, null);
 
-        Assert.Same(newer, picked);
+        Assert.Equal([newer, older], candidates);
+    }
+
+    [Fact]
+    public void Candidates_PicksBestFirst_ConvenienceHelperMatchesFirstOfList()
+    {
+        var worse = MakeAgent("worse", maxSessions: 2, activeJobs: 1); // ratio 0.5
+        var better = MakeAgent("better", maxSessions: 4, activeJobs: 1); // ratio 0.25
+
+        var picked = PickBest([worse, better], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+
+        Assert.Same(better, picked);
     }
 }

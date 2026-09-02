@@ -58,6 +58,76 @@ public class AgentHubHandshakeTests
         Assert.Equal(3, agent.Info.MaxSessions);
         Assert.True(agent.IsConnected);
 
+        // hello omitted hwaccel - the hub must infer it (macos platform -> videotoolbox, PROTOCOL.md).
+        Assert.Equal("videotoolbox", agent.Info.Hwaccel);
+        Assert.Null(agent.Info.HwaccelDevice);
+        Assert.Equal("/Volumes/data", agent.Info.Mounts[0].EffectiveServerPath);
+
+        cts.Cancel();
+        await Task.WhenAny(runTask, Task.Delay(Timeout));
+    }
+
+    [Fact]
+    public async Task RunConnectionAsync_UsesAnnouncedHwaccelAndMountServerPath_WhenPresent()
+    {
+        var hub = MakeHub();
+        var socket = new FakeAgentWebSocket();
+
+        var hello = new HelloFrame(
+            "linux-box",
+            "0.2.0",
+            "linux-x86_64",
+            new FfmpegInfoFrame("/opt/anemone/ffmpeg", "7.1.2-Jellyfin", ["vaapi"], ["h264_vaapi", "aac"], ["h264"], ["scale_vaapi"]),
+            [new AgentMountFrame("/mnt/media", true, "/Volumes/data")],
+            2,
+            "vaapi",
+            "/dev/dri/renderD128");
+        socket.EnqueueIncoming(Frame.Serialize(hello));
+
+        using var cts = new CancellationTokenSource();
+        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, cts.Token);
+
+        using var readCts = new CancellationTokenSource(Timeout);
+        await socket.Outgoing.ReadAsync(readCts.Token);
+
+        await WaitUntilAsync(() => hub.Agents.Count == 1);
+        var agent = Assert.Single(hub.Agents);
+
+        Assert.Equal("vaapi", agent.Info.Hwaccel);
+        Assert.Equal("/dev/dri/renderD128", agent.Info.HwaccelDevice);
+        Assert.Equal("/mnt/media", agent.Info.Mounts[0].Path);
+        Assert.Equal("/Volumes/data", agent.Info.Mounts[0].EffectiveServerPath);
+
+        cts.Cancel();
+        await Task.WhenAny(runTask, Task.Delay(Timeout));
+    }
+
+    [Fact]
+    public async Task RunConnectionAsync_InfersVaapi_WhenNonMacosPlatformReportsVaapiHwaccel()
+    {
+        var hub = MakeHub();
+        var socket = new FakeAgentWebSocket();
+
+        var hello = new HelloFrame(
+            "linux-box-2",
+            "0.2.0",
+            "linux-x86_64",
+            new FfmpegInfoFrame("/opt/anemone/ffmpeg", "7.1.2-Jellyfin", ["vaapi"], ["h264_vaapi"], ["h264"], ["scale_vaapi"]),
+            [new AgentMountFrame("/Volumes/data", true)],
+            2); // hwaccel omitted - must infer from platform + ffmpeg.hwaccels
+        socket.EnqueueIncoming(Frame.Serialize(hello));
+
+        using var cts = new CancellationTokenSource();
+        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, cts.Token);
+
+        using var readCts = new CancellationTokenSource(Timeout);
+        await socket.Outgoing.ReadAsync(readCts.Token);
+
+        await WaitUntilAsync(() => hub.Agents.Count == 1);
+        var agent = Assert.Single(hub.Agents);
+
+        Assert.Equal("vaapi", agent.Info.Hwaccel);
+
         cts.Cancel();
         await Task.WhenAny(runTask, Task.Delay(Timeout));
     }

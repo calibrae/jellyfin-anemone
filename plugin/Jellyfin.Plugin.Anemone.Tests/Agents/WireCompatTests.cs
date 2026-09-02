@@ -34,6 +34,27 @@ public class WireCompatTests
         Assert.Equal("/Volumes/data", f.Mounts[0].Path);
     }
 
+    private const string RustHelloWithHwaccelAndServerPath = """
+        {"type":"hello","name":"linux-box","version":"0.2.0","platform":"linux-x86_64",
+         "ffmpeg":{"path":"/opt/anemone/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["vaapi"],
+                   "encoders":["h264_vaapi","hevc_vaapi","aac"],"decoders":["h264","hevc"],
+                   "filters":["scale_vaapi","volume"]},
+         "mounts":[{"path":"/mnt/media","ok":true,"server_path":"/Volumes/data"}],"max_sessions":2,
+         "hwaccel":"vaapi","hwaccel_device":"/dev/dri/renderD128"}
+        """;
+
+    [Fact]
+    public void ParsesRustHello_WithHwaccelAndMountServerPath()
+    {
+        var f = Assert.IsType<HelloFrame>(Frame.Parse(RustHelloWithHwaccelAndServerPath));
+
+        Assert.Equal("vaapi", f.Hwaccel);
+        Assert.Equal("/dev/dri/renderD128", f.HwaccelDevice);
+        Assert.Single(f.Mounts!);
+        Assert.Equal("/mnt/media", f.Mounts![0].Path);
+        Assert.Equal("/Volumes/data", f.Mounts[0].ServerPath);
+    }
+
     [Theory]
     [InlineData("""{"type":"status","active":2}""")]
     [InlineData("""{"type":"status","active":1,"load":0.5,"mounts":[{"path":"/Volumes/data","ok":false}]}""")]

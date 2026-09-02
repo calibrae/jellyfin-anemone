@@ -42,16 +42,23 @@ internal sealed class FakeAgentConnection : IAgentConnection
 
 internal sealed class FakeAgentRegistry : IAgentRegistry
 {
-    public IAgentConnection? AgentToReturn { get; set; }
+    /// <summary>Convenience single-candidate setter/getter, kept for tests that only care about one agent.</summary>
+    public IAgentConnection? AgentToReturn
+    {
+        get => CandidatesToReturn.Count > 0 ? CandidatesToReturn[0] : null;
+        set => CandidatesToReturn = value is null ? [] : [value];
+    }
+
+    public IReadOnlyList<IAgentConnection> CandidatesToReturn { get; set; } = [];
 
     public JobRequirements? LastRequirements { get; private set; }
 
-    public IReadOnlyList<IAgentConnection> Agents => AgentToReturn is null ? [] : [AgentToReturn];
+    public IReadOnlyList<IAgentConnection> Agents => CandidatesToReturn;
 
-    public IAgentConnection? Pick(JobRequirements requirements)
+    public IReadOnlyList<IAgentConnection> Candidates(JobRequirements requirements)
     {
         LastRequirements = requirements;
-        return AgentToReturn;
+        return CandidatesToReturn;
     }
 }
 

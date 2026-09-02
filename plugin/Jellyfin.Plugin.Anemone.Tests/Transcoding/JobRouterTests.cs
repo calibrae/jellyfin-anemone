@@ -31,7 +31,11 @@ public class JobRouterTests
         return state;
     }
 
-    private static AgentInfo CreateAgentInfo(string name = "trish", IReadOnlyList<string>? hwaccels = null, IReadOnlyList<string>? encoders = null)
+    private static AgentInfo CreateAgentInfo(
+        string name = "trish",
+        IReadOnlyList<string>? hwaccels = null,
+        IReadOnlyList<string>? encoders = null,
+        string hwaccel = "videotoolbox")
     {
         return new AgentInfo(
             name,
@@ -45,7 +49,8 @@ public class JobRouterTests
             ["scale_vt", "volume"],
             [new AgentMount("/Volumes/data", true)],
             3,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            hwaccel);
     }
 
     private static JobRouter CreateRouter(FakeAgentRegistry registry, FakeIngestTokenStore tokenStore, FakeServerApplicationHost host)
@@ -177,5 +182,81 @@ public class JobRouterTests
         Assert.Null(host.LastGetApiUrlForLocalAccessCall!.Value.IpAddress);
         Assert.False(host.LastGetApiUrlForLocalAccessCall!.Value.AllowHttps);
         Assert.Contains("http://fallback.local:8096/Anemone/ingest/", plan!.Spec.Argv[^1]);
+    }
+
+    private static AgentInfo CreateVaapiAgentInfo(string name, string? hwaccelDevice, string mountServerPath = "/Volumes/data", string mountPath = "/mnt/media")
+    {
+        return new AgentInfo(
+            name,
+            "0.1.0",
+            "linux-x86_64",
+            "/opt/anemone/ffmpeg",
+            "7.1.2-Jellyfin",
+            ["vaapi"],
+            ["h264_vaapi", "hevc_vaapi", "aac"],
+            ["h264", "hevc"],
+            ["scale_vaapi", "volume"],
+            [new AgentMount(mountPath, true, mountServerPath)],
+            3,
+            DateTimeOffset.UtcNow,
+            "vaapi",
+            hwaccelDevice);
+    }
+
+    [Fact]
+    public void TryPlan_SkipsCandidateThatFailsTranslation_PicksNextThatSucceeds()
+    {
+        // First candidate is vaapi but has no hwaccel_device announced - HwTranslator must refuse it.
+        var cannotTranslate = new FakeAgentConnection(CreateVaapiAgentInfo("bad-vaapi", hwaccelDevice: null));
+        var canTranslate = new FakeAgentConnection(CreateVaapiAgentInfo("good-vaapi", hwaccelDevice: "/dev/dri/renderD128"));
+        var registry = new FakeAgentRegistry { CandidatesToReturn = [cannotTranslate, canTranslate] };
+        var router = CreateRouter(registry, new FakeIngestTokenStore(), new FakeServerApplicationHost());
+        var state = CreateStreamState(Fixtures.InputPath);
+
+        var plan = router.TryPlan(state, Fixtures.TranscodesDir + "/" + Fixtures.Md5 + ".m3u8", Fixtures.TranscodeCommandLine, TranscodingJobType.Hls);
+
+        Assert.NotNull(plan);
+        Assert.Same(canTranslate, plan!.Agent);
+        Assert.Contains("h264_vaapi", plan.Spec.Argv);
+    }
+
+    [Fact]
+    public void TryPlan_NoCandidateCanRunTheJob_ReturnsNull()
+    {
+        var cannotTranslate1 = new FakeAgentConnection(CreateVaapiAgentInfo("bad-1", hwaccelDevice: null));
+        var cannotTranslate2 = new FakeAgentConnection(CreateVaapiAgentInfo("bad-2", hwaccelDevice: null));
+        var registry = new FakeAgentRegistry { CandidatesToReturn = [cannotTranslate1, cannotTranslate2] };
+        var tokenStore = new FakeIngestTokenStore();
+        var router = CreateRouter(registry, tokenStore, new FakeServerApplicationHost());
+        var state = CreateStreamState(Fixtures.InputPath);
+
+        var plan = router.TryPlan(state, Fixtures.TranscodesDir + "/" + Fixtures.Md5 + ".m3u8", Fixtures.TranscodeCommandLine, TranscodingJobType.Hls);
+
+        Assert.Null(plan);
+        Assert.Empty(tokenStore.Issued);
+    }
+
+    [Fact]
+    public void TryPlan_RewritesInputPathViaTheWinningCandidatesMounts()
+    {
+        var agent = new FakeAgentConnection(CreateVaapiAgentInfo("good-vaapi", hwaccelDevice: "/dev/dri/renderD128", mountServerPath: "/Volumes/data", mountPath: "/mnt/media"));
+        var registry = new FakeAgentRegistry { AgentToReturn = agent };
+        var router = CreateRouter(registry, new FakeIngestTokenStore(), new FakeServerApplicationHost());
+        var state = CreateStreamState(Fixtures.InputPath);
+
+        var plan = router.TryPlan(state, Fixtures.TranscodesDir + "/" + Fixtures.Md5 + ".m3u8", Fixtures.TranscodeCommandLine, TranscodingJobType.Hls);
+
+        Assert.NotNull(plan);
+        var expectedInput = "file:" + Fixtures.InputPath.Replace("/Volumes/data", "/mnt/media", StringComparison.Ordinal);
+        Assert.Contains(expectedInput, plan!.Spec.Argv);
+    }
+
+    [Theory]
+    [InlineData("videotoolbox", "videotoolbox", false, true)] // matches - always eligible
+    [InlineData("vaapi", "videotoolbox", true, true)] // translation allowed - eligible even though it differs
+    [InlineData("vaapi", "videotoolbox", false, false)] // translation disallowed and differs - not eligible
+    public void IsProfileTranslationAllowed_GatesOnConfigAndProfileMatch(string agentProfile, string sourceProfile, bool allowHwProfileTranslation, bool expected)
+    {
+        Assert.Equal(expected, JobRouter.IsProfileTranslationAllowed(agentProfile, sourceProfile, allowHwProfileTranslation));
     }
 }
