@@ -69,10 +69,13 @@ public sealed class AgentInfoBuilder
         return this;
     }
 
-    /// <summary>Adds one mount (path on the agent, ok, optional server-visible path - see PROTOCOL.md "Path mapping").</summary>
-    public AgentInfoBuilder WithMount(string path, bool ok = true, string? serverPath = null)
+    /// <summary>
+    /// Adds one mount (path on the agent, ok, optional server-visible path, optional locality - see
+    /// PROTOCOL.md "Path mapping" and "Placement inputs (v2.1)").
+    /// </summary>
+    public AgentInfoBuilder WithMount(string path, bool ok = true, string? serverPath = null, bool? local = null)
     {
-        _mounts = [.. _mounts, new AgentMount(path, ok, serverPath)];
+        _mounts = [.. _mounts, new AgentMount(path, ok, serverPath, local)];
         return this;
     }
 
@@ -167,6 +170,13 @@ public sealed class HelloFrameBuilder
     public HelloFrameBuilder WithMounts(params AgentMountFrame[] mounts)
     {
         _mounts = mounts;
+        return this;
+    }
+
+    /// <summary>Adds one mount (path on the agent, ok, optional server-visible path, optional locality).</summary>
+    public HelloFrameBuilder WithMount(string path, bool ok = true, string? serverPath = null, bool? local = null)
+    {
+        _mounts = [.. _mounts ?? [], new AgentMountFrame(path, ok, serverPath, local)];
         return this;
     }
 

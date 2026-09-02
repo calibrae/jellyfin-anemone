@@ -14,9 +14,10 @@ public sealed record FfmpegInfoFrame(
 /// <summary>
 /// One mount entry inside <see cref="HelloFrame"/> / <see cref="StatusFrame"/>. <paramref name="ServerPath"/>
 /// is what the Jellyfin server calls the same tree; absent (null) when identical to <paramref name="Path"/>.
-/// See PROTOCOL.md "Path mapping".
+/// See PROTOCOL.md "Path mapping". <paramref name="Local"/> is <c>true</c> when the tree is on storage
+/// attached to the agent itself; optional, see PROTOCOL.md "Placement inputs (v2.1)".
 /// </summary>
-public sealed record AgentMountFrame(string Path, bool Ok, string? ServerPath = null);
+public sealed record AgentMountFrame(string Path, bool Ok, string? ServerPath = null, bool? Local = null);
 
 /// <summary>
 /// First frame an agent sends after connecting. Server answers <see cref="WelcomeFrame"/> or <see cref="RejectFrame"/>.

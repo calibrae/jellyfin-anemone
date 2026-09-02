@@ -103,7 +103,7 @@ public sealed class AgentHub : IAgentRegistry
             hello.Ffmpeg.Encoders ?? Array.Empty<string>(),
             hello.Ffmpeg.Decoders ?? Array.Empty<string>(),
             hello.Ffmpeg.Filters ?? Array.Empty<string>(),
-            (hello.Mounts ?? Array.Empty<AgentMountFrame>()).Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath)).ToList(),
+            (hello.Mounts ?? Array.Empty<AgentMountFrame>()).Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath, m.Local)).ToList(),
             hello.MaxSessions,
             DateTimeOffset.UtcNow,
             hwaccel,
@@ -193,7 +193,7 @@ public sealed class AgentHub : IAgentRegistry
             logger?.LogDebug("anemone: server ffmpeg version unknown ('{Raw}'); skipping ffmpeg version match check", serverFfmpegVersion);
         }
 
-        var candidates = new List<(IAgentConnection Agent, double Ratio)>();
+        var candidates = new List<(IAgentConnection Agent, AgentRankingResult Ranking)>();
 
         foreach (var agent in agents)
         {
@@ -235,15 +235,63 @@ public sealed class AgentHub : IAgentRegistry
                 }
             }
 
-            candidates.Add((agent, (double)agent.ActiveJobs / agent.Info.MaxSessions));
+            var rankingInput = new AgentRankingInput(
+                agent.Info.Name,
+                AggregateLocality(agent.Info.Mounts, requirements.InputPaths),
+                agent.MeasuredSpeed,
+                1.0 - ((double)agent.ActiveJobs / agent.Info.MaxSessions),
+                agent.Load);
+            var ranking = AgentRanker.Score(rankingInput);
+            logger?.LogDebug("anemone: candidate {Reason}", ranking.Reason);
+
+            candidates.Add((agent, ranking));
         }
 
+        // Highest score first; ties (identical score - the common case when locality/throughput/load are
+        // all unknown, i.e. today's fleet with no measurements yet) fall back to the same tie-breaks
+        // placement always used: fewer active jobs, then most recently seen.
         return candidates
-            .OrderBy(c => c.Ratio)
+            .OrderByDescending(c => c.Ranking.Score)
             .ThenBy(c => c.Agent.ActiveJobs)
             .ThenByDescending(c => c.Agent.LastSeen)
             .Select(c => c.Agent)
             .ToList();
+    }
+
+    /// <summary>
+    /// The <see cref="AgentRankingInput.Local"/> this job would see on <paramref name="mounts"/>: true only
+    /// when every input path is covered by a mount that reported <c>local: true</c>; false if any input is
+    /// covered by a mount that explicitly reported <c>local: false</c> (the network round trip happens
+    /// regardless of how the others are covered); otherwise null (unknown - at least one covering mount
+    /// didn't say, or there's no specific job to check, e.g. a status-page summary).
+    /// </summary>
+    private static bool? AggregateLocality(IReadOnlyList<AgentMount> mounts, IReadOnlyList<string> inputPaths)
+    {
+        var sawUnknown = false;
+        var sawAny = false;
+
+        foreach (var input in inputPaths)
+        {
+            var match = MountPathMapper.FindLongestMatch(mounts, input);
+            sawAny = true;
+
+            if (match?.Local == false)
+            {
+                return false;
+            }
+
+            if (match?.Local != true)
+            {
+                sawUnknown = true;
+            }
+        }
+
+        if (sawUnknown || !sawAny)
+        {
+            return null;
+        }
+
+        return true;
     }
 
     /// <summary>

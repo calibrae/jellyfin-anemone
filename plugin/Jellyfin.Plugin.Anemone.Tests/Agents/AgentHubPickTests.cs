@@ -19,6 +19,10 @@ public class AgentHubPickTests
 
         public DateTimeOffset LastSeen { get; init; } = DateTimeOffset.UtcNow;
 
+        public double? MeasuredSpeed { get; init; }
+
+        public double? Load { get; init; }
+
         public Task<IRemoteJob> StartJobAsync(RemoteJobSpec spec, IRemoteJobSink sink, CancellationToken cancellationToken) =>
             throw new NotSupportedException("not needed for placement tests");
     }
@@ -55,7 +59,9 @@ public class AgentHubPickTests
         IReadOnlyList<string>? hwaccels = null,
         IReadOnlyList<string>? encoders = null,
         IReadOnlyList<AgentMount>? mounts = null,
-        string ffmpegVersion = "7.1.2-Jellyfin")
+        string ffmpegVersion = "7.1.2-Jellyfin",
+        double? measuredSpeed = null,
+        double? load = null)
     {
         return new FakeAgentConnection
         {
@@ -63,6 +69,8 @@ public class AgentHubPickTests
             ActiveJobs = activeJobs,
             IsConnected = isConnected,
             LastSeen = lastSeen ?? DateTimeOffset.UtcNow,
+            MeasuredSpeed = measuredSpeed,
+            Load = load,
         };
     }
 
@@ -266,5 +274,133 @@ public class AgentHubPickTests
         var picked = PickBest([worse, better], NoRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
 
         Assert.Same(better, picked);
+    }
+
+    // --- Ranking (§2/§3 of the placement task: media locality, measured throughput, spare capacity, load) ---
+
+    private static readonly JobRequirements DataMountRequirements = new([], [], [], [], ["/Volumes/data/x.mkv"]);
+
+    [Fact]
+    public void Candidates_LocalMediaAgent_BeatsModestlyFasterNetworkMountedAgent()
+    {
+        var local = MakeAgent("local", mounts: [new AgentMount("/Volumes/data", true, Local: true)]);
+        var remoteModestlyFaster = MakeAgent("remote", mounts: [new AgentMount("/Volumes/data", true, Local: false)], measuredSpeed: 1.3);
+
+        var candidates = AgentHub.CandidatesFrom(
+            [remoteModestlyFaster, local],
+            DataMountRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        Assert.Equal([local, remoteModestlyFaster], candidates);
+    }
+
+    [Fact]
+    public void Candidates_MuchFasterRemoteAgent_BeatsLocalMediaAgent()
+    {
+        var local = MakeAgent("local", mounts: [new AgentMount("/Volumes/data", true, Local: true)]);
+        var remoteMuchFaster = MakeAgent("remote", mounts: [new AgentMount("/Volumes/data", true, Local: false)], measuredSpeed: 5.0);
+
+        var candidates = AgentHub.CandidatesFrom(
+            [local, remoteMuchFaster],
+            DataMountRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        Assert.Equal([remoteMuchFaster, local], candidates);
+    }
+
+    [Fact]
+    public void Candidates_UnknownLocality_RanksBetweenKnownLocalAndKnownRemote()
+    {
+        var local = MakeAgent("local", mounts: [new AgentMount("/Volumes/data", true, Local: true)]);
+        var unknown = MakeAgent("unknown", mounts: [new AgentMount("/Volumes/data", true)]); // Local omitted
+        var remote = MakeAgent("remote", mounts: [new AgentMount("/Volumes/data", true, Local: false)]);
+
+        var candidates = AgentHub.CandidatesFrom(
+            [remote, unknown, local],
+            DataMountRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        Assert.Equal([local, unknown, remote], candidates);
+    }
+
+    [Fact]
+    public void Candidates_NewAgentWithNoMeasurement_IsNotStarvedByAMeasuredSlowerAgent()
+    {
+        // No measurement yet must NOT be treated as "assumed slow" - it's ranked on capacity alone and
+        // beats an agent that has actually measured below real-time.
+        var unmeasured = MakeAgent("brand-new");
+        var measuredSlow = MakeAgent("measured-slow", measuredSpeed: 0.5);
+
+        var candidates = AgentHub.CandidatesFrom(
+            [measuredSlow, unmeasured],
+            NoRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        Assert.Equal([unmeasured, measuredSlow], candidates);
+    }
+
+    [Fact]
+    public void Candidates_UnmeasuredAgent_TiesWithAgentMeasuredExactlyAtRealtimeBaseline()
+    {
+        var unmeasured = MakeAgent("unmeasured", lastSeen: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(5));
+        var measuredAtBaseline = MakeAgent("measured-at-baseline", measuredSpeed: 1.0, lastSeen: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(1));
+
+        var candidates = AgentHub.CandidatesFrom(
+            [unmeasured, measuredAtBaseline],
+            NoRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        // Same score -> falls through to the LastSeen tie-break, most-recent first.
+        Assert.Equal([measuredAtBaseline, unmeasured], candidates);
+    }
+
+    [Fact]
+    public void Candidates_HigherReportedLoad_RanksLower()
+    {
+        var idle = MakeAgent("idle", load: 0.1);
+        var busy = MakeAgent("busy", load: 0.8);
+
+        var candidates = AgentHub.CandidatesFrom(
+            [busy, idle],
+            NoRequirements,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(30),
+            false,
+            null);
+
+        Assert.Equal([idle, busy], candidates);
+    }
+
+    [Fact]
+    public void Candidates_FullyLoadedAgent_ExcludedRegardlessOfLocalityOrSpeed()
+    {
+        // Eligibility (capacity) must not regress even though the new ranking signals could otherwise make
+        // this agent look very attractive.
+        var full = MakeAgent(
+            "full-but-otherwise-ideal",
+            maxSessions: 2,
+            activeJobs: 2,
+            mounts: [new AgentMount("/Volumes/data", true, Local: true)],
+            measuredSpeed: 5.0,
+            load: 0.0);
+
+        var candidates = AgentHub.CandidatesFrom([full], DataMountRequirements, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), false, null);
+
+        Assert.Empty(candidates);
     }
 }

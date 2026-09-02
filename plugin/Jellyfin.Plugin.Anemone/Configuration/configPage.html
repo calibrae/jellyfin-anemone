@@ -110,12 +110,15 @@
                                 <th class="tableColumn">Hwaccels</th>
                                 <th class="tableColumn">Hw profile</th>
                                 <th class="tableColumn">Active/Max</th>
+                                <th class="tableColumn">Speed</th>
+                                <th class="tableColumn">Load</th>
                                 <th class="tableColumn">Mounts (server path -&gt; agent path)</th>
                                 <th class="tableColumn">Last seen</th>
+                                <th class="tableColumn">Why</th>
                             </tr>
                         </thead>
                         <tbody id="AnemoneAgentsTableBody">
-                            <tr><td colspan="8">No agents connected.</td></tr>
+                            <tr><td colspan="11">No agents connected.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -203,12 +206,20 @@
                 return diff + "s ago";
             }
 
+            function formatSpeed(value) {
+                return typeof value === "number" ? value.toFixed(2) + "x" : "unmeasured";
+            }
+
+            function formatLoad(value) {
+                return typeof value === "number" ? value.toFixed(2) : "unreported";
+            }
+
             function renderAgents(status) {
                 var body = page.querySelector("#AnemoneAgentsTableBody");
                 var agents = pick(status, "Agents", "agents") || [];
 
                 if (!agents.length) {
-                    body.innerHTML = '<tr><td colspan="8">No agents connected.</td></tr>';
+                    body.innerHTML = '<tr><td colspan="11">No agents connected.</td></tr>';
                     return;
                 }
 
@@ -217,10 +228,12 @@
                         var ok = pick(m, "Ok", "ok");
                         var serverPath = pick(m, "ServerPath", "serverPath");
                         var path = pick(m, "Path", "path");
+                        var local = pick(m, "Local", "local");
+                        var localSuffix = local === true ? " [local]" : (local === false ? " [remote]" : "");
                         var label = serverPath && serverPath !== path
                             ? escapeHtml(serverPath) + " &rarr; " + escapeHtml(path)
                             : escapeHtml(path);
-                        return (ok ? "✓ " : "✗ ") + label;
+                        return (ok ? "✓ " : "✗ ") + label + escapeHtml(localSuffix);
                     }).join("<br/>");
 
                     var hwaccels = (pick(a, "Hwaccels", "hwaccels") || []).join(", ");
@@ -231,6 +244,9 @@
                     var nameSuffix = connected ? "" : " (disconnected)";
                     var active = pick(a, "ActiveJobs", "activeJobs");
                     var max = pick(a, "MaxSessions", "maxSessions");
+                    var speed = formatSpeed(pick(a, "MeasuredSpeed", "measuredSpeed"));
+                    var load = formatLoad(pick(a, "Load", "load"));
+                    var reason = pick(a, "RankReason", "rankReason") || "";
 
                     return "<tr>" +
                         "<td>" + escapeHtml(pick(a, "Name", "name")) + nameSuffix + "</td>" +
@@ -239,8 +255,11 @@
                         "<td>" + escapeHtml(hwaccels) + "</td>" +
                         "<td>" + escapeHtml(hwProfileLabel) + "</td>" +
                         "<td>" + escapeHtml(active) + "/" + escapeHtml(max) + "</td>" +
+                        "<td>" + escapeHtml(speed) + "</td>" +
+                        "<td>" + escapeHtml(load) + "</td>" +
                         "<td>" + (mounts || "&#8212;") + "</td>" +
                         "<td>" + secondsAgoText(pick(a, "LastSeen", "lastSeen")) + "</td>" +
+                        "<td><small>" + escapeHtml(reason) + "</small></td>" +
                         "</tr>";
                 }).join("");
 
