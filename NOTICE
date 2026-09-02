@@ -1,0 +1,33 @@
+jellyfin-anemone
+================
+
+This project is not affiliated with, endorsed by, or sponsored by the Jellyfin Project. "Jellyfin"
+is used here only to describe interoperability with, and a fork of code from, that project.
+
+License
+-------
+
+The whole repository is licensed under the GNU General Public License, version 2 or (at your
+option) any later version (GPL-2.0-or-later). See LICENSE for the full text.
+
+Derived work
+------------
+
+`plugin/Jellyfin.Plugin.Anemone/Transcoding/AnemoneTranscodeManager.cs` is derived from Jellyfin's
+`MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs`, as it stood at the Jellyfin v10.11.0
+tag (https://github.com/jellyfin/jellyfin). That file, and the Jellyfin project as a whole, is
+licensed under GPL-2.0-or-later, copyright the Jellyfin Contributors. The fork keeps the diff
+against upstream minimal and marks every change with a `// anemone:` comment; see the file header
+and PROTOCOL.md for details.
+
+`docs/upstream-10.11.0/` holds verbatim copies of the upstream Jellyfin source files the fork above
+is based on and diffed against when rebasing on a new Jellyfin minor (`ITranscodeManager.cs`,
+`JobLogger.cs`, `StreamState.cs`, `TranscodeManager.cs`, `TranscodingJob.cs`,
+`TranscodingSegmentCleaner.cs`, `TranscodingThrottler.cs`). These files are unmodified copies from
+jellyfin/jellyfin, kept for reference only, under the same GPL-2.0-or-later license and copyright
+as the project they came from.
+
+Everything else in this repository (the rest of the plugin, the `polyp` agent, documentation,
+scripts) is original work released under the same GPL-2.0-or-later license, chosen because it must
+cover the derived file above — the whole repository takes the more restrictive license rather than
+splitting licensing file-by-file.
