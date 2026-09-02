@@ -313,4 +313,111 @@ public class AnemoneTranscodeManagerTests
 
         Assert.Contains(jobId, harness.TokenStore.Revoked);
     }
+
+    // --- PreferRemote / LocalMaxSessions (RemotePlacementPolicy) ---
+
+    [Fact]
+    public async Task StartFfMpeg_PreferRemoteFalse_BelowLocalMaxSessions_NeverConsultsRouter()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness(cfg =>
+        {
+            cfg.PreferRemote = false;
+            cfg.LocalMaxSessions = 2;
+        });
+        var outputPath = harness.OutputPath("prefer-local.m3u8");
+        harness.UseFakeFfmpeg(outputPath);
+
+        // The router would happily route this if asked - PreferRemote=false with 0 active local jobs
+        // (well below the cap of 2) must mean it's never even asked.
+        harness.Router.PlanToReturn = BuildPlan(new FakeAgentConnection(new AgentInfoBuilder().Build()), "unused", "/tmp", "prefer-local");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+
+        var job = await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+
+        Assert.NotNull(job);
+        Assert.True(File.Exists(outputPath));
+        Assert.Empty(harness.Router.Calls);
+    }
+
+    [Fact]
+    public async Task StartFfMpeg_PreferRemoteFalse_AtLocalMaxSessions_RoutesTheNextJob()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness(cfg =>
+        {
+            cfg.PreferRemote = false;
+            cfg.LocalMaxSessions = 2;
+        });
+
+        // Two local jobs, kept running (FakeFfmpegScript's default: waits on stdin for "q") so they count
+        // as active local jobs for the third StartFfMpeg call below. Distinct device/play-session ids so
+        // KillTranscodingJobs below can target each one individually - NewState()'s default is the same
+        // fixed "device-1"/"play-session-1" for every build.
+        var outputPath1 = harness.OutputPath("local-1.m3u8");
+        harness.UseFakeFfmpeg(outputPath1);
+        var state1 = harness.NewState().WithDeviceId("device-1").WithPlaySessionId("session-1").Build();
+        using var cts1 = new CancellationTokenSource();
+        var job1 = await harness.Manager.StartFfMpeg(state1, outputPath1, "-f hls -y " + outputPath1, Guid.Empty, TranscodingJobType.Hls, cts1);
+        Assert.False(job1.HasExited);
+
+        var outputPath2 = harness.OutputPath("local-2.m3u8");
+        harness.UseFakeFfmpeg(outputPath2);
+        var state2 = harness.NewState().WithDeviceId("device-2").WithPlaySessionId("session-2").Build();
+        using var cts2 = new CancellationTokenSource();
+        var job2 = await harness.Manager.StartFfMpeg(state2, outputPath2, "-f hls -y " + outputPath2, Guid.Empty, TranscodingJobType.Hls, cts2);
+        Assert.False(job2.HasExited);
+
+        // The decision for job2 was made while only job1 was active (1 < 2) - the router still hasn't
+        // been asked at all.
+        Assert.Empty(harness.Router.Calls);
+
+        var outputPath3 = harness.OutputPath("routed-3.m3u8");
+        var jobId3 = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().Build()) { ExitCodeAfterStart = null };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath3, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId3, Path.GetDirectoryName(outputPath3)!, "routed-3");
+
+        var state3 = harness.NewState().WithDeviceId("device-3").WithPlaySessionId("session-3").Build();
+        using var cts3 = new CancellationTokenSource();
+        var job3 = await harness.Manager.StartFfMpeg(state3, outputPath3, "-f hls -y " + outputPath3, Guid.Empty, TranscodingJobType.Hls, cts3);
+
+        Assert.Single(harness.Router.Calls);
+        Assert.Equal(jobId3, job3.Id);
+
+        // Clean up the two local jobs so they don't outlive the test.
+        await harness.Manager.KillTranscodingJobs(state1.Request.DeviceId, state1.Request.PlaySessionId, _ => false);
+        await harness.Manager.KillTranscodingJobs(state2.Request.DeviceId, state2.Request.PlaySessionId, _ => false);
+
+        var killTask = harness.Manager.KillTranscodingJobs(state3.Request.DeviceId, state3.Request.PlaySessionId, _ => false);
+        var started = Assert.Single(agent.StartedJobs);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
+        started.Job.CompleteExited(0);
+        await killTask;
+    }
+
+    [Fact]
+    public async Task StartFfMpeg_PreferRemoteTrue_RoutesEvenWithNoActiveLocalJobs()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness(cfg => cfg.PreferRemote = true);
+        var outputPath = harness.OutputPath("prefer-remote.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().Build()) { ExitCodeAfterStart = null };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "prefer-remote");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+
+        var job = await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+
+        Assert.Equal(jobId, job.Id);
+        Assert.Single(harness.Router.Calls);
+
+        var killTask = harness.Manager.KillTranscodingJobs(state.Request.DeviceId, state.Request.PlaySessionId, _ => false);
+        var started = Assert.Single(agent.StartedJobs);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
+        started.Job.CompleteExited(0);
+        await killTask;
+    }
 }

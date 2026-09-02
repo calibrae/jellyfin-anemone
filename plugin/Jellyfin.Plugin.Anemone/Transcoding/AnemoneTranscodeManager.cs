@@ -483,7 +483,25 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
         RoutePlan? plan = null;
         if (cfg is { Enabled: true } && transcodingJobType == TranscodingJobType.Hls)
         {
-            plan = _router.TryPlan(state, outputPath, commandLineArguments, transcodingJobType);
+            // anemone: PreferRemote/LocalMaxSessions gate whether the router is even consulted. The router
+            // itself stays a pure "can/should this job go to an agent" function (see RemotePlacementPolicy);
+            // only the manager knows the current local job count, since only it owns _activeTranscodingJobs
+            // and _remoteJobs.
+            var activeLocalJobs = CountActiveLocalJobs();
+            var consultRouter = RemotePlacementPolicy.ShouldConsultRouter(cfg.PreferRemote, cfg.LocalMaxSessions, activeLocalJobs);
+
+            _logger.LogDebug(
+                "anemone: placement policy for {Path}: preferRemote={PreferRemote} localMaxSessions={LocalMaxSessions} activeLocalJobs={ActiveLocalJobs} consultRouter={ConsultRouter}",
+                outputPath,
+                cfg.PreferRemote,
+                cfg.LocalMaxSessions,
+                activeLocalJobs,
+                consultRouter);
+
+            if (consultRouter)
+            {
+                plan = _router.TryPlan(state, outputPath, commandLineArguments, transcodingJobType);
+            }
         }
 
         if (plan is not null && cfg!.DryRun)
@@ -796,6 +814,17 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
         _logger.LogDebug("anemone: TryStartRemoteAsync() finished successfully");
 
         return transcodingJob;
+    }
+
+    // anemone: how many transcodes this server is currently doing FOR ITSELF - active jobs not tracked in
+    // _remoteJobs. Read by the PreferRemote/LocalMaxSessions gate above, before the job that's about to
+    // start has been added to either collection, so it never counts itself.
+    private int CountActiveLocalJobs()
+    {
+        lock (_activeTranscodingJobs)
+        {
+            return _activeTranscodingJobs.Count(j => !j.HasExited && (j.Id is null || !_remoteJobs.ContainsKey(j.Id)));
+        }
     }
 
     private void RemoveFromActiveJobs(TranscodingJob job)
