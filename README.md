@@ -47,6 +47,11 @@ ls /tmp/anemone-out        # testjob0.ts … testjob.m3u8
 
 ## Status
 
-v0 — mockup built, not yet run against a live Jellyfin. Scope of v0: HLS video transcodes only, macOS→macOS
+v0 — **running live** on speedwagon (Jellyfin 10.11.0) with two agents: trish (macOS/VideoToolbox over
+Thunderbolt) and abbacchio (Debian/VAAPI, media on local disk at a different path). The plugin translates
+the server's VideoToolbox command line for each agent's hardware, maps media paths per agent, and hands
+each agent the ingest URL of the interface it connected on. See `docs/DEPLOY.md`.
+
+Earlier v0 note: Scope of v0: HLS video transcodes only, macOS→macOS
 (VideoToolbox) agents, media reachable on the agent at the same path. Probing, thumbnails, trickplay, subtitle
 burn-in, progressive streams and live TV stay local. See `RESEARCH.md` §7–§9.

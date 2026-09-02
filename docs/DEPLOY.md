@@ -116,3 +116,86 @@ loaded (`~/anemone/launchd-pending/`).
 - `/usr/local/bin/polyp`, `/usr/local/bin/anemone-mount.sh`, `/etc/polyp.toml` (0600, cali)
 - polyp started from a login shell; logs at `~/anemone/polyp.log`
 - restart by hand: `ssh trish 'pkill -f "polyp --config"; nohup /usr/local/bin/polyp --config /etc/polyp.toml > ~/anemone/polyp.log 2>&1 &'`
+
+
+---
+
+# Adding a Linux agent with different hardware and a different media path (abbacchio, 2026-09-02)
+
+The fleet is deliberately heterogeneous now, and all three differences are handled by the plugin rather
+than by making the boxes match:
+
+| | trish | abbacchio |
+|---|---|---|
+| OS / arch | macOS 26, arm64 | Debian 13, x86_64 (i5-1240P, Iris Xe) |
+| hwaccel | videotoolbox | **vaapi** (`/dev/dri/renderD128`) |
+| media | `/Volumes/data` (SMB, same path as the server) | **`/mnt/das/data` — local disk**, mapped to the server's `/Volumes/data` |
+| link to the server | Thunderbolt, `10.240.0.1` | LAN, `10.10.0.2` |
+| ingest URL it is handed | `http://10.240.0.1:8097` | `http://10.10.0.2:8097` |
+
+abbacchio is the best-placed agent in the fleet: it *is* the storage host, so its ffmpeg reads the
+source file off local disk and only the finished segments cross the network.
+
+## Setup performed
+
+```sh
+# 1. jellyfin-ffmpeg (portable, matching the server's 7.1.x line)
+sudo mkdir -p /opt/anemone && cd /tmp
+curl -sL -o jf.tar.xz https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v7.1.4-3/jellyfin-ffmpeg_7.1.4-3_portable_linux64-gpl.tar.xz
+sudo tar xf jf.tar.xz -C /opt/anemone
+
+# 2. VAAPI userspace driver, and the render group (WITHOUT it every VAAPI init fails)
+sudo apt-get install -y libva-utils intel-media-va-driver-non-free
+sudo usermod -aG render "$USER"     # log out/in: an existing session keeps the old groups
+
+# 3. verify the whole pipeline before involving Jellyfin
+/opt/anemone/ffmpeg -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va \
+  -f lavfi -i testsrc=duration=3:size=1920x1080:rate=25 \
+  -vf 'format=nv12,hwupload,scale_vaapi=w=1280:h=720' -c:v h264_vaapi -f null -
+
+# 4. build polyp natively (needs a C toolchain: Rust cannot link without one)
+sudo apt-get install -y build-essential
+rsync -a --exclude target agent/ abbacchio:~/anemone-build/ && ssh abbacchio 'cd ~/anemone-build && cargo build --release'
+```
+
+`/etc/polyp.toml`:
+```toml
+server_url = "ws://10.10.0.2:8097/Anemone/agents/ws"
+secret = "…"                      # same as the plugin's SharedSecret
+name = "abbacchio"
+ffmpeg = "/opt/anemone/ffmpeg"
+max_sessions = 4
+hwaccel = "vaapi"                 # omit to auto-detect; it picks vaapi here anyway
+hwaccel_device = "/dev/dri/renderD128"
+
+[[mounts]]
+path = "/mnt/das/data"            # where the tree is on this agent
+server_path = "/Volumes/data"     # what Jellyfin calls it
+```
+
+## Measured on abbacchio
+
+| 1080p HEVC → 720p H.264, 60 s | speed |
+|---|---|
+| VAAPI (Iris Xe) | **25.2× realtime** |
+| libx264 veryfast (16 threads) | 14.1× realtime |
+
+A real routed job ran at **51.8× realtime**, first segment served in **0.44 s**, segments arriving at
+~18/s (≈54× realtime) with no `.part` left behind.
+
+## Two failures worth knowing about
+
+1. **`format=nv12` must survive translation.** Jellyfin adds it when the source is 10-bit (HEVC Main10
+   decodes to p010, and H.264 encoders take 8-bit). Dropping it during translation made VAAPI reject
+   exactly the 10-bit half of the library with `No usable encoding profile found`, while 8-bit files
+   worked — a partial failure that is easy to misread as a broken file.
+2. **The ingest URL is per agent, not per server.** With `IngestBaseUrl` left empty each agent is told
+   the address it actually reached the server on. Set globally to the Thunderbolt address, abbacchio
+   PUT every segment into a black hole: ffmpeg ignores HTTP status codes on PUT, so there is no error
+   anywhere — the transcode runs to completion at full speed and playback simply stalls.
+
+## Not usable as an agent
+- **doppio** (i9-9900K + RTX 4070): the 4070 is bound to `vfio_pci` for the mira VM, and the UHD 630
+  iGPU exposes decode-only VAAPI profiles (`vainfo` lists no `EncSlice` entrypoint, MPEG2/JPEG/VP8/VP9
+  only). It would work as a software (`hwaccel = "none"`) agent; it builds and passes the polyp test
+  suite there (Fedora 43).
