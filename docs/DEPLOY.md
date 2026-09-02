@@ -48,8 +48,10 @@ Dashboard → Plugins → Anemone: trish shows up in the agents table (hwaccels:
 5. `pkill polyp` on trish mid-stream → speedwagon marks the job exited; next segment request restarts locally.
 
 ## Known gaps in v0 (by design)
-Throttling off for remote jobs; subtitle burn-in, external subs, progressive, live TV, probing/trickplay stay local;
-macOS→macOS only; HTTP input fallback not wired (needs the same-path mount).
+Throttling off for remote jobs; subtitle burn-in, external subs, progressive, live TV, probing/trickplay stay
+local; HTTP input fallback not wired (an agent needs the media on a mount of its own). Heterogeneous agents
+are supported — see the abbacchio section below for a Linux/VAAPI agent whose media path differs from the
+server's.
 
 
 ---
@@ -199,3 +201,28 @@ A real routed job ran at **51.8× realtime**, first segment served in **0.44 s**
   iGPU exposes decode-only VAAPI profiles (`vainfo` lists no `EncSlice` entrypoint, MPEG2/JPEG/VP8/VP9
   only). It would work as a software (`hwaccel = "none"`) agent; it builds and passes the polyp test
   suite there (Fedora 43).
+
+
+## Running polyp as a systemd service (abbacchio, done 2026-09-02)
+
+The unit runs as a dedicated unprivileged `polyp` user, which on this host needs two supplementary groups —
+neither is optional, and both fail in ways that look like something else:
+
+- `render` for `/dev/dri/renderD128` (`crw-rw---- root:render`). Without it every VAAPI init fails with
+  "No VA display found", which reads like a driver problem rather than a permissions one.
+- `users` for the media tree (`/mnt/das/data` is `drwxrwx--- cali:users`). Without it the mount probes as
+  unusable and the agent simply never gets offered jobs.
+
+`RequiresMountsFor=/mnt/das` orders the service after the media mount, so polyp does not start first and
+report the mount unusable.
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin polyp
+sudo usermod -aG users,render polyp
+sudo chown root:polyp /etc/polyp.toml && sudo chmod 640 /etc/polyp.toml   # it holds the shared secret
+sudo install -m 644 agent/systemd/polyp.service /etc/systemd/system/polyp.service
+sudo systemctl daemon-reload && sudo systemctl enable --now polyp
+```
+
+Verified: transcodes run with `ffmpeg` owned by `polyp`, the service survives `systemctl restart` and
+reconnects on its own, and it is enabled for boot.
