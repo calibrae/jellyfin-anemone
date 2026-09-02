@@ -1,0 +1,33 @@
+name: agent CI
+
+on:
+  push:
+    paths:
+      - "agent/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - ".github/workflows/ci.yml"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test --release
+        run: cargo test --release
