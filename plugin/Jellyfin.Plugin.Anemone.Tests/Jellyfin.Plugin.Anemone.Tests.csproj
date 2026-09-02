@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Jellyfin.Plugin.Anemone\Jellyfin.Plugin.Anemone.csproj" />
+    <ProjectReference Include="..\Jellyfin.Plugin.Anemone.TestKit\Jellyfin.Plugin.Anemone.TestKit.csproj" />
   </ItemGroup>
 
   <ItemGroup>
