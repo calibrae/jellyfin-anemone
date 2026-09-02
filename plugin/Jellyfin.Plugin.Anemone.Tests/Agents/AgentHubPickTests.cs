@@ -11,6 +11,8 @@ public class AgentHubPickTests
     {
         public required AgentInfo Info { get; init; }
 
+        public string IngestBase { get; init; } = "http://10.10.0.2:8097";
+
         public int ActiveJobs { get; init; }
 
         public bool IsConnected { get; init; } = true;

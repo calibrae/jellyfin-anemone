@@ -115,11 +115,11 @@ public sealed class JobRouter : IJobRouter
             var filePrefix = Path.GetFileNameWithoutExtension(outputPath);
             var token = _tokenStore.Issue(jobId, targetDirectory, filePrefix);
 
-            var configuredBase = Plugin.Instance?.Configuration.IngestBaseUrl;
-            var ingestBase = !string.IsNullOrWhiteSpace(configuredBase)
-                ? configuredBase!
-                : _applicationHost.GetApiUrlForLocalAccess(null, false);
-            ingestBase = ingestBase.TrimEnd('/');
+            // Each agent uploads to the address it actually reached us on, handed to it in its welcome
+            // (see IAgentConnection.IngestBase). A server-wide URL cannot serve a Thunderbolt-attached
+            // agent and a LAN agent at once, and getting this wrong is invisible: ffmpeg ignores HTTP
+            // status codes on PUT, so segments simply vanish and playback stalls with no error anywhere.
+            var ingestBase = candidate.IngestBase.TrimEnd('/');
 
             var rewritten = RoutePlanner.Rewrite(translatedArgv, ingestBase, jobId, token);
 

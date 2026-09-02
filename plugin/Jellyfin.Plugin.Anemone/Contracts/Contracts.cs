@@ -82,6 +82,13 @@ public interface IAgentConnection
 {
     AgentInfo Info { get; }
 
+    /// <summary>
+    /// Absolute base URL THIS agent uploads segments to — the value it was given in its <c>welcome</c>,
+    /// derived from the interface it actually reached the server on. Jobs must be rewritten with this and
+    /// never with a server-wide value: a Thunderbolt-attached agent and a LAN agent do not share one.
+    /// </summary>
+    string IngestBase { get; }
+
     int ActiveJobs { get; }
 
     bool IsConnected { get; }

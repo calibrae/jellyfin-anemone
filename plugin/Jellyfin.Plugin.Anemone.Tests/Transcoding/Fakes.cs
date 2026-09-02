@@ -28,7 +28,9 @@ internal sealed class FakeAgentConnection : IAgentConnection
         Info = info;
     }
 
-    public AgentInfo Info { get; }
+    public string IngestBase { get; set; } = "http://10.10.0.2:8097";
+
+        public AgentInfo Info { get; }
 
     public int ActiveJobs { get; init; }
 

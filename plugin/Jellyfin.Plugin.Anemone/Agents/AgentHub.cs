@@ -115,12 +115,14 @@ public sealed class AgentHub : IAgentRegistry
             await existing.CloseAsync("replaced by new connection", CancellationToken.None).ConfigureAwait(false);
         }
 
+        var ingestBase = ResolveIngestBase(localAddress);
+
         var welcome = new WelcomeFrame(
             new ServerInfo(_appHost.ApplicationVersionString, _mediaEncoder.EncoderVersion?.ToString() ?? string.Empty),
-            ResolveIngestBase(localAddress),
+            ingestBase,
             PingIntervalSeconds);
 
-        var connection = new AgentConnection(socket, info, PingIntervalSeconds, _loggerFactory.CreateLogger<AgentConnection>());
+        var connection = new AgentConnection(socket, info, ingestBase, PingIntervalSeconds, _loggerFactory.CreateLogger<AgentConnection>());
 
         try
         {

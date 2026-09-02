@@ -29,16 +29,20 @@ public sealed class AgentConnection : IAgentConnection
     private AgentInfo _info;
     private CancellationTokenSource? _runCts;
 
-    public AgentConnection(WebSocket socket, AgentInfo info, int pingIntervalSeconds, ILogger<AgentConnection> logger)
+    public AgentConnection(WebSocket socket, AgentInfo info, string ingestBase, int pingIntervalSeconds, ILogger<AgentConnection> logger)
     {
         _socket = socket ?? throw new ArgumentNullException(nameof(socket));
         _info = info ?? throw new ArgumentNullException(nameof(info));
+        IngestBase = ingestBase;
         _pingIntervalSeconds = pingIntervalSeconds;
         _logger = logger;
         LastSeen = DateTimeOffset.UtcNow;
     }
 
     public AgentInfo Info => _info;
+
+    /// <inheritdoc />
+    public string IngestBase { get; }
 
     public int ActiveJobs { get; private set; }
 

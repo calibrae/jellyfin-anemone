@@ -37,7 +37,7 @@ public class AgentConnectionTests
 
     private static AgentConnection MakeConnection(FakeAgentWebSocket socket, out CancellationTokenSource runCts, out Task runTask)
     {
-        var connection = new AgentConnection(socket, MakeInfo(), 10, NullLogger<AgentConnection>.Instance);
+        var connection = new AgentConnection(socket, MakeInfo(), "http://10.10.0.2:8097", 10, NullLogger<AgentConnection>.Instance);
         runCts = new CancellationTokenSource();
         runTask = connection.RunAsync(runCts.Token);
         return connection;

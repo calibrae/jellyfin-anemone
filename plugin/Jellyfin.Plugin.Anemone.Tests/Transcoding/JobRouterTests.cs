@@ -74,7 +74,8 @@ public class JobRouterTests
         Assert.Equal(Fixtures.Md5, plan.FilePrefix);
         Assert.Equal("tok-123", plan.Spec.IngestToken);
         Assert.Equal($"Transcode {Fixtures.Md5}", plan.Spec.Label);
-        Assert.Contains($"http://10.240.0.1:8096/Anemone/ingest/{plan.Spec.Id}/{Fixtures.Md5}.m3u8", plan.Spec.Argv);
+        // the URL comes from the AGENT's ingest base (the interface it reached us on), not the app host
+        Assert.Contains($"http://10.10.0.2:8097/Anemone/ingest/{plan.Spec.Id}/{Fixtures.Md5}.m3u8", plan.Spec.Argv);
     }
 
     [Fact]
@@ -165,23 +166,24 @@ public class JobRouterTests
         Assert.Null(plan3);
     }
 
+    // Regression (found live 2026-09-02): the router used to build the ingest URL from a server-wide
+    // value, so a LAN agent was told to upload to the Thunderbolt address of another agent - or, as
+    // actually happened, to Jellyfin's own port instead of the plugin listener. ffmpeg ignores HTTP
+    // status codes on PUT, so every segment silently vanished and playback just stalled.
     [Fact]
-    public void TryPlan_EmptyIngestBaseUrlConfigured_FallsBackToApplicationHost()
+    public void TryPlan_UsesTheIngestBaseOfTheChosenAgent_NotAServerWideValue()
     {
-        var registry = new FakeAgentRegistry { AgentToReturn = new FakeAgentConnection(CreateAgentInfo()) };
-        var host = new FakeServerApplicationHost { UrlToReturn = "http://fallback.local:8096" };
+        var agent = new FakeAgentConnection(CreateAgentInfo()) { IngestBase = "http://10.240.0.1:8097" };
+        var registry = new FakeAgentRegistry { AgentToReturn = agent };
+        var host = new FakeServerApplicationHost { UrlToReturn = "http://should-not-be-used:8096" };
         var router = CreateRouter(registry, new FakeIngestTokenStore(), host);
         var state = CreateStreamState(Fixtures.InputPath);
 
-        // Plugin.Instance is null in this test host (no real plugin loaded), so IngestBaseUrl is
-        // never configured - TryPlan must fall back to IServerApplicationHost.GetApiUrlForLocalAccess.
         var plan = router.TryPlan(state, Fixtures.TranscodesDir + "/" + Fixtures.Md5 + ".m3u8", Fixtures.TranscodeCommandLine, TranscodingJobType.Hls);
 
         Assert.NotNull(plan);
-        Assert.NotNull(host.LastGetApiUrlForLocalAccessCall);
-        Assert.Null(host.LastGetApiUrlForLocalAccessCall!.Value.IpAddress);
-        Assert.False(host.LastGetApiUrlForLocalAccessCall!.Value.AllowHttps);
-        Assert.Contains("http://fallback.local:8096/Anemone/ingest/", plan!.Spec.Argv[^1]);
+        Assert.Contains("http://10.240.0.1:8097/Anemone/ingest/", plan!.Spec.Argv[^1]);
+        Assert.DoesNotContain(plan.Spec.Argv, a => a.Contains("should-not-be-used", StringComparison.Ordinal));
     }
 
     private static AgentInfo CreateVaapiAgentInfo(string name, string? hwaccelDevice, string mountServerPath = "/Volumes/data", string mountPath = "/mnt/media")
