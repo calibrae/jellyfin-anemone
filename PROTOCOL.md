@@ -128,6 +128,7 @@ Linux agent NFS-mounts the same tree at `/mnt/media`. Each mount entry therefore
 | field | meaning |
 |---|---|
 | `path` | where the tree lives **on the agent** — what its ffmpeg must open |
+| `local` | `true` when that tree is on storage attached to the agent, so reading a source costs no network round trip. Optional; omit when unknown. Placement prefers a local-media agent, because reading the source is usually the larger transfer — the segments it sends back are already compressed |
 | `server_path` | what the **Jellyfin server** calls the same tree. Optional; defaults to `path` (identical layout) |
 | `ok` | the agent could actually read it (see the probe timeout note below) |
 
@@ -174,3 +175,21 @@ agent's reported `encoders`/`filters`, and refuses the placement if not.
 
 `-codec:v copy` (remux) needs no video translation at all; only `aac_at` has to be mapped, which is
 why remuxes are portable to any agent.
+
+
+## Placement inputs (v2.1, 2026-09-02)
+
+Placement ranks the agents that *can* run a job; these fields tell it which one *should*. All are
+advisory — a missing or stale value only costs an agent its ranking edge, never its eligibility.
+
+| field | frame | meaning |
+|---|---|---|
+| `mounts[].local` | `hello`, `status` | see above: the media is on the agent's own storage |
+| `load` | `status` | 0..1, the agent's own view of how busy it is. Advisory: the server already knows the job count, this adds what the job count cannot see (other tenants on the box, a transcode that is unusually cheap or expensive) |
+
+The server measures throughput itself rather than asking for it: ffmpeg reports `speed=N.Nx` on stderr,
+those lines already flow back over the control channel for Jellyfin's progress display, and the plugin
+keeps a per-agent rolling average from them. That number is self-calibrating and needs no configuration —
+an agent that is fast at *this* library's files, on *this* hardware, with *this* link, earns its ranking
+by the work it actually did. An agent that has not run a job yet has no measurement and is ranked on its
+free capacity alone.
