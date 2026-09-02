@@ -40,4 +40,11 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Require the agent's ffmpeg major.minor to match the server's.</summary>
     public bool RequireMatchingFfmpeg { get; set; } = true;
+
+    /// <summary>
+    /// Allow routing a job to an agent whose hwaccel profile differs from the source (translating the
+    /// command line via <see cref="Jellyfin.Plugin.Anemone.Transcoding.HwTranslator"/>). When false, only
+    /// agents whose profile already matches the source are eligible - today's (pre-translation) behaviour.
+    /// </summary>
+    public bool AllowHwProfileTranslation { get; set; } = true;
 }

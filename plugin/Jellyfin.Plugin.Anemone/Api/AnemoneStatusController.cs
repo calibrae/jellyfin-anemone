@@ -19,10 +19,12 @@ public sealed record AgentStatusEntry(
     int MaxSessions,
     DateTimeOffset ConnectedAt,
     DateTimeOffset LastSeen,
-    bool Connected);
+    bool Connected,
+    string Hwaccel,
+    string? HwaccelDevice);
 
 /// <summary>One mount entry in an <see cref="AgentStatusEntry"/>.</summary>
-public sealed record MountStatusEntry(string Path, bool Ok);
+public sealed record MountStatusEntry(string Path, bool Ok, string ServerPath);
 
 /// <summary>Response body of <c>GET Anemone/status</c>.</summary>
 public sealed record AnemoneStatusResponse(
@@ -60,12 +62,14 @@ public sealed class AnemoneStatusController : ControllerBase
                 a.Info.FfmpegVersion,
                 a.Info.Hwaccels,
                 a.Info.Encoders.Count,
-                a.Info.Mounts.Select(m => new MountStatusEntry(m.Path, m.Ok)).ToList(),
+                a.Info.Mounts.Select(m => new MountStatusEntry(m.Path, m.Ok, m.EffectiveServerPath)).ToList(),
                 a.ActiveJobs,
                 a.Info.MaxSessions,
                 a.Info.ConnectedAt,
                 a.LastSeen,
-                a.IsConnected))
+                a.IsConnected,
+                a.Info.Hwaccel,
+                a.Info.HwaccelDevice))
             .ToList();
 
         var response = new AnemoneStatusResponse(
