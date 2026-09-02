@@ -33,6 +33,16 @@ mounts = ["/Volumes/data"]
 # [[mounts]]
 # path = "/mnt/media"           # where the tree lives on THIS agent
 # server_path = "/Volumes/data" # what the Jellyfin server calls the same tree
+#
+# The agent auto-detects whether each mount is on storage attached to it (statfs's MNT_LOCAL flag
+# on macOS; longest-matching /proc/self/mountinfo entry + filesystem type on Linux -- NFS/CIFS/SMB
+# and friends are "not local", everything else is) and reports it as `mounts[].local` so the
+# server can prefer an agent that can read the source without a network round trip. Set `local`
+# explicitly to override detection when you know better (e.g. an iSCSI LUN or a network block
+# device that looks local, or vice versa):
+# [[mounts]]
+# path = "/mnt/das/data"
+# local = true
 
 # Hardware-acceleration profile this agent's ffmpeg jobs should be built for:
 # videotoolbox, nvenc, qsv, vaapi, amf, rkmpp, or none (software only, e.g. libx264).

@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 use polyp::config::{Cli, Config};
 use polyp::hwaccel::{self, DetectInputs};
 use polyp::job::JobManager;
+use polyp::mount_local;
 use polyp::probe::{check_mount, platform_string, probe_ffmpeg};
 use polyp::ws;
 
@@ -45,14 +46,15 @@ async fn main() -> Result<()> {
             if m.server_path != m.path {
                 status.server_path = Some(m.server_path.clone());
             }
+            status.local = mount_local::resolve_local(m.local, mount_local::detect_local(&m.path));
             status
         })
         .collect();
     for m in &mounts {
         if m.ok {
-            info!(path = %m.path, server_path = ?m.server_path, "mount ok");
+            info!(path = %m.path, server_path = ?m.server_path, local = ?m.local, "mount ok");
         } else {
-            warn!(path = %m.path, server_path = ?m.server_path, "mount not ok (will still start)");
+            warn!(path = %m.path, server_path = ?m.server_path, local = ?m.local, "mount not ok (will still start)");
         }
     }
 
