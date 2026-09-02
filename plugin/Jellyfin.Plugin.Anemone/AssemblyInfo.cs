@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
 
-// Exposes internal test seams (e.g. AgentHub.PickFrom) to the test project without widening the public API.
+// Exposes internal test seams (e.g. AgentHub.PickFrom) to the test projects without widening the public API.
 [assembly: InternalsVisibleTo("Jellyfin.Plugin.Anemone.Tests")]
+[assembly: InternalsVisibleTo("Jellyfin.Plugin.Anemone.IntegrationTests")]

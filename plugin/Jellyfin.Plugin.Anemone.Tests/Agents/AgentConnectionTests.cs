@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.Anemone.Agents;
 using Jellyfin.Plugin.Anemone.Agents.Protocol;
 using Jellyfin.Plugin.Anemone.Contracts;
+using Jellyfin.Plugin.Anemone.TestKit;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Jellyfin.Plugin.Anemone.Tests.Agents;

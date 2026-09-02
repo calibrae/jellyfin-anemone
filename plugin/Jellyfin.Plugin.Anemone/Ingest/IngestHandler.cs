@@ -57,12 +57,22 @@ public sealed class IngestHandler
             Directory.CreateDirectory(grant.TargetDirectory);
             await using (var fs = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, CopyBufferBytes, FileOptions.Asynchronous))
             {
-                await context.Request.Body.CopyToAsync(fs, context.RequestAborted).ConfigureAwait(false);
+                // anemone: deliberately NOT context.RequestAborted. PROTOCOL.md is explicit that ffmpeg
+                // "ignores HTTP status codes on PUT" - it writes the chunked body and moves on to the next
+                // segment without ever reading our response, often closing its end of the socket before
+                // we've had a chance to answer. Over a real network link that race resolves itself (there's
+                // enough latency for CopyToAsync to drain the already-fully-received body first), but
+                // measured live over loopback: Kestrel can fire RequestAborted from that early close before
+                // CopyToAsync has drained data that already arrived complete and intact, which would abort
+                // a perfectly good upload for a reason that has nothing to do with the bytes themselves.
+                // A genuinely dropped/incomplete connection still surfaces as IOException from the pipe
+                // itself (caught below) with no token needed to detect it.
+                await context.Request.Body.CopyToAsync(fs, CancellationToken.None).ConfigureAwait(false);
             }
 
             IoFile.Move(partPath, finalPath, overwrite: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             _logger.LogWarning(ex, "anemone: ingest write failed job={JobId} name={Name}", jobId, name);
             TryDelete(partPath);

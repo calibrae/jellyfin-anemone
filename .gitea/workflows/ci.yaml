@@ -6,7 +6,7 @@ jobs:
     runs-on: speedwagon
     steps:
       - uses: actions/checkout@v4
-      - name: cargo fmt / clippy / test
+      - name: cargo fmt / clippy / test / build
         working-directory: agent
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
@@ -19,7 +19,11 @@ jobs:
           mkdir -p dist && cp agent/target/release/polyp agent/target/release/anemone-mock dist/
           ls -la dist
 
+  # needs: agent so the EndToEnd step below reliably finds agent/target/release/polyp already built -
+  # both jobs run on the same self-hosted, host-mode runner and share its on-disk checkout, but nothing
+  # guarantees ordering between two independent jobs without this dependency.
   plugin:
+    needs: agent
     runs-on: speedwagon
     steps:
       - uses: actions/checkout@v4
@@ -29,12 +33,36 @@ jobs:
             curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 9.0 --install-dir "$HOME/.dotnet"
           fi
           "$HOME/.dotnet/dotnet" --version
-      - name: build + test
+      - name: build
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: "1"
           DOTNET_NOLOGO: "1"
         run: |
           export PATH="$HOME/.dotnet:$PATH"
           dotnet build plugin/anemone.sln -c Release
-          dotnet test plugin/anemone.sln -c Release --no-build
-          scripts/package-plugin.sh
+      - name: unit tests (Jellyfin.Plugin.Anemone.Tests)
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test plugin/Jellyfin.Plugin.Anemone.Tests -c Release --no-build
+      - name: integration tests (Jellyfin.Plugin.Anemone.IntegrationTests, excluding EndToEnd)
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test plugin/Jellyfin.Plugin.Anemone.IntegrationTests -c Release --no-build --filter "Category!=EndToEnd"
+      # Real polyp (built by the agent job above) + real ffmpeg. EndToEndTests.cs uses [SkippableFact] and
+      # skips rather than fails if it can't find either, so this step is safe even before ffmpeg is set up
+      # on this runner (see DEPLOY.md for how the live agents got theirs - /opt/anemone/ffmpeg or PATH).
+      - name: end-to-end tests (real polyp + real ffmpeg)
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          DOTNET_NOLOGO: "1"
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test plugin/Jellyfin.Plugin.Anemone.IntegrationTests -c Release --no-build --filter "Category=EndToEnd"
+      - name: package plugin
+        run: scripts/package-plugin.sh

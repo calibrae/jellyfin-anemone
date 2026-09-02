@@ -1,6 +1,7 @@
 using System.Net;
 using Jellyfin.Plugin.Anemone.Agents;
 using Jellyfin.Plugin.Anemone.Agents.Protocol;
+using Jellyfin.Plugin.Anemone.TestKit;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging.Abstractions;

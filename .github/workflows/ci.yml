@@ -1,17 +1,19 @@
-name: agent CI
+name: CI
 
 on:
   push:
     paths:
       - "agent/**"
+      - "plugin/**"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
       - "agent/**"
+      - "plugin/**"
       - ".github/workflows/ci.yml"
 
 jobs:
-  test:
+  agent:
     strategy:
       fail-fast: false
       matrix:
@@ -31,3 +33,58 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test --release
         run: cargo test --release
+
+  # Build + unit tests (Jellyfin.Plugin.Anemone.Tests) + integration tests
+  # (Jellyfin.Plugin.Anemone.IntegrationTests, minus the EndToEnd category - see the plugin-e2e job below).
+  # Neither tier needs the Rust agent or a real ffmpeg: unit tests are pure TestKit fakes, integration
+  # tests boot the real AnemoneListener/AgentHub/IngestHandler on an ephemeral port and drive them with a
+  # real ClientWebSocket/HttpClient (see plugin/Jellyfin.Plugin.Anemone.IntegrationTests's own remarks).
+  plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Build
+        run: dotnet build plugin/anemone.sln -c Release
+      - name: Unit tests (Jellyfin.Plugin.Anemone.Tests)
+        run: dotnet test plugin/Jellyfin.Plugin.Anemone.Tests -c Release --no-build
+      - name: Integration tests (Jellyfin.Plugin.Anemone.IntegrationTests, excluding EndToEnd)
+        run: dotnet test plugin/Jellyfin.Plugin.Anemone.IntegrationTests -c Release --no-build --filter "Category!=EndToEnd"
+
+  # The real thing: a real polyp binary (built here with cargo) talks to the real AnemoneListener, and
+  # real ffmpeg on "the agent" (still this runner, a separate process) PUTs real HLS segments back.
+  # EndToEndTests.cs uses [SkippableFact] and skips (not fails) if it can't find polyp/ffmpeg, so this job
+  # only adds coverage - it never blocks the other two on a runner that can't build/run either one.
+  plugin-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build polyp (release)
+        working-directory: agent
+        run: cargo build --release --bin polyp
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Build plugin
+        run: dotnet build plugin/anemone.sln -c Release
+      - name: EndToEnd tests (real polyp + real ffmpeg)
+        run: dotnet test plugin/Jellyfin.Plugin.Anemone.IntegrationTests -c Release --no-build --filter "Category=EndToEnd"

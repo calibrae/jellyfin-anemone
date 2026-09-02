@@ -1,4 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    anemone: real in-process wiring, no external processes for the tier below EndToEnd - the real
+    AnemoneListener on an ephemeral port, real System.Net.WebSockets.ClientWebSocket, real HTTP PUT.
+    EndToEnd-tagged tests additionally shell out to a real polyp binary + real ffmpeg; see EndToEndTests.cs
+    for how those are located and skipped when unavailable.
+  -->
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -8,17 +15,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- anemone: only needed so the hand-written IServerApplicationHost test fake can declare the
-         GetSmartApiUrl(HttpRequest) overload; never actually invoked. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-    <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.85" />
   </ItemGroup>
 
   <ItemGroup>

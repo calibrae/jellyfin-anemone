@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    anemone: reusable test doubles for the Jellyfin plugin SDK surface AnemoneTranscodeManager/JobRouter/
+    AgentHub/the controllers consume. Written so another Jellyfin plugin author could lift this project
+    wholesale - it has no dependency on the Tests project (Tests depends on this, never the reverse) and
+    no dependency on a test framework (xunit etc): hand-written fakes only, usable from any test runner.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.Anemone.TestKit</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.0" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Needed only for System.Net.WebSockets' abstract WebSocket base class (FakeAgentWebSocket) and
+         Microsoft.Extensions.Configuration (EncodingHelperFactory's real, empty IConfiguration). Never
+         copied to an output dir that ships anywhere - this project is test infrastructure only. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Jellyfin.Plugin.Anemone\Jellyfin.Plugin.Anemone.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -2,14 +2,17 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Threading.Channels;
 
-namespace Jellyfin.Plugin.Anemone.Tests.Agents;
+namespace Jellyfin.Plugin.Anemone.TestKit;
 
 /// <summary>
-/// In-memory <see cref="WebSocket"/> standing in for a polyp's end of the connection. Tests push
-/// incoming text frames with <see cref="EnqueueIncoming"/> (simulating the agent) and read what the server
-/// sent back from <see cref="Outgoing"/>. <see cref="CompleteIncoming"/> simulates the agent disconnecting.
+/// In-memory <see cref="WebSocket"/> standing in for a polyp's end of the control connection - an
+/// in-memory duplex pair: <see cref="EnqueueIncoming"/> is the "agent sends this" side and
+/// <see cref="Outgoing"/> is the "agent receives this" side, so <see cref="Agents.AgentConnection"/>/
+/// <see cref="Agents.AgentHub"/> can be driven end to end (handshake, job frames, stderr, exit, ping/pong,
+/// disconnect) without opening a real socket. <see cref="CompleteIncoming"/> simulates the agent
+/// disconnecting (the next <see cref="ReceiveAsync"/> returns a Close result).
 /// </summary>
-internal sealed class FakeAgentWebSocket : WebSocket
+public sealed class FakeAgentWebSocket : WebSocket
 {
     private readonly Channel<string> _incoming = Channel.CreateUnbounded<string>();
     private readonly Channel<string> _outgoing = Channel.CreateUnbounded<string>();
