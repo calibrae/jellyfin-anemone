@@ -100,6 +100,20 @@ Design points worth knowing before reading code (all covered at length in [`PROT
 | `research/` | The research reports behind `RESEARCH.md`, with file:line citations and the ffmpeg network-IO experiments. |
 | `scripts/` | Package / install / deploy helpers. |
 
+## Install
+
+Add this repository in Jellyfin (Dashboard → Plugins → Repositories → **+**):
+
+```
+https://raw.githubusercontent.com/calibrae/jellyfin-anemone/main/manifest.json
+```
+
+then install **Anemone** from the catalogue and restart Jellyfin. Requires Jellyfin 10.11.x — the plugin is
+built against a specific Jellyfin version and will refuse to load on a different one.
+
+To install by hand instead, unzip the release asset into `plugins/Anemone_<version>/` inside your Jellyfin
+data directory, so that `Jellyfin.Plugin.Anemone.dll` and `meta.json` sit directly in that folder.
+
 ## Quick start
 
 ### Plugin (server)

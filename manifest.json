@@ -1,0 +1,20 @@
+[
+  {
+    "guid": "7d0c3a4e-2f5b-4c8a-9e1d-6b2f0a9c1e77",
+    "name": "Anemone",
+    "description": "Offload live transcodes to agent machines. ffmpeg runs on the agent and pushes the HLS segments back over HTTP, so no shared storage is needed for the transcode output.",
+    "overview": "Distributed live transcoding without shared storage.",
+    "owner": "calibrae",
+    "category": "General",
+    "versions": [
+      {
+        "version": "0.1.0.0",
+        "changelog": "First release. Per-agent hardware translation, media path mapping, per-agent ingest URLs, placement by media locality and measured throughput, and transparent fallback to local transcoding.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/calibrae/jellyfin-anemone/releases/download/v0.1.0/Anemone_0.1.0.0.zip",
+        "checksum": "4699d5f14c726fafc7cbc2323f5d3d93",
+        "timestamp": "2026-09-02T17:37:31Z"
+      }
+    ]
+  }
+]
