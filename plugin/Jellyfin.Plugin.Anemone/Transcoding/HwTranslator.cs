@@ -502,10 +502,24 @@ public static class HwTranslator
                     return false;
                 }
 
-                var (w, h) = ExtractWidthHeight(eq >= 0 ? segment[(eq + 1)..] : string.Empty);
-                segments[s] = w is not null && h is not null
-                    ? $"{targetName}=w={w}:h={h}"
-                    : targetName;
+                var args = eq >= 0 ? segment[(eq + 1)..] : string.Empty;
+                var (w, h) = ExtractWidthHeight(args);
+                var pixelFormat = ExtractFilterOption(args, "format");
+
+                // Carry `format=` across to the hardware scalers. It is not cosmetic: Jellyfin emits
+                // `format=nv12` when the source is 10-bit (HEVC Main10 decodes to p010) and the encoder
+                // only takes 8-bit. Dropping it makes h264_vaapi fail with "No usable encoding profile
+                // found" on exactly those files — verified live on abbacchio, 2026-09-02. The software
+                // scaler has no `format` option and needs none: ffmpeg auto-inserts the conversion.
+                var keepFormat = pixelFormat is not null && !string.Equals(targetName, "scale", StringComparison.Ordinal);
+
+                segments[s] = (w, h, keepFormat) switch
+                {
+                    (not null, not null, true) => $"{targetName}=w={w}:h={h}:format={pixelFormat}",
+                    (not null, not null, false) => $"{targetName}=w={w}:h={h}",
+                    (_, _, true) => $"{targetName}=format={pixelFormat}",
+                    _ => targetName,
+                };
             }
 
             if (touched)
@@ -519,6 +533,21 @@ public static class HwTranslator
 
         reason = string.Empty;
         return true;
+    }
+
+    /// <summary>Read a single <c>key=value</c> option out of an ffmpeg filter's argument string.</summary>
+    private static string? ExtractFilterOption(string args, string key)
+    {
+        foreach (var part in args.Split(':'))
+        {
+            var eq = part.IndexOf('=');
+            if (eq > 0 && string.Equals(part[..eq], key, StringComparison.Ordinal))
+            {
+                return part[(eq + 1)..];
+            }
+        }
+
+        return null;
     }
 
     private static (string? W, string? H) ExtractWidthHeight(string filterOptions)

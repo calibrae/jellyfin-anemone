@@ -167,7 +167,7 @@ public class HwTranslatorTests
     // --- Fixture 2: aac_at mapping, format= param dropped, profile/level/-af preserved untouched ---
 
     [Fact]
-    public void TryTranslate_HigherResFixture_MapsAacAtAndDropsFormatParam()
+    public void TryTranslate_HigherResFixture_MapsAacAtAndKeepsFormatParam()
     {
         var argv = ArgumentLine.Split(Fixtures.HwVideotoolboxHigherResCommandLine);
         var agent = MakeVaapiAgent();
@@ -182,7 +182,7 @@ public class HwTranslatorTests
             deviceInitIndex,
             ["-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]);
         expected[expected.IndexOf("-codec:v:0") + 1] = "h264_vaapi";
-        expected[expected.IndexOf("-vf") + 1] = "scale_vaapi=w=1280:h=640"; // format=nv12 dropped, only w/h kept
+        expected[expected.IndexOf("-vf") + 1] = "scale_vaapi=w=1280:h=640:format=nv12"; // format= carried across: 10-bit sources need it on VAAPI
         expected[expected.IndexOf("-codec:a:0") + 1] = "aac"; // aac_at -> aac
         expected.RemoveRange(expected.IndexOf("-prio_speed"), 2);
 
@@ -535,5 +535,33 @@ public class HwTranslatorTests
         Assert.DoesNotContain("-init_hw_device", translated);
         Assert.DoesNotContain("-hwaccel", translated);
         Assert.DoesNotContain("videotoolbox", translated);
+    }
+
+    // Jellyfin adds format=nv12 when the source is 10-bit; h264_vaapi cannot encode 10-bit, so losing it
+    // makes exactly those files fail with "No usable encoding profile found" (hit live on abbacchio).
+    [Theory]
+    [InlineData("scale_vt=w=1280:h=960:format=nv12", "scale_vaapi=w=1280:h=960:format=nv12")]
+    [InlineData("scale_vt=w=640:h=360", "scale_vaapi=w=640:h=360")]
+    public void ScaleTranslationToVaapiKeepsPixelFormat(string source, string expected)
+    {
+        var argv = ArgumentLine.Split(
+            $"-init_hw_device videotoolbox=vt -hwaccel videotoolbox -i file:/Volumes/data/x.mkv " +
+            $"-codec:v:0 h264_videotoolbox -vf {source} -codec:a:0 aac -f hls out.m3u8");
+
+        Assert.True(HwTranslator.TryTranslate(argv, MakeVaapiAgent(), out var translated, out var reason), reason);
+        Assert.Contains(expected, translated);
+    }
+
+    // The software scaler has no `format` option — ffmpeg inserts the conversion itself.
+    [Fact]
+    public void ScaleTranslationToSoftwareDropsPixelFormat()
+    {
+        var argv = ArgumentLine.Split(
+            "-init_hw_device videotoolbox=vt -hwaccel videotoolbox -i file:/Volumes/data/x.mkv " +
+            "-codec:v:0 h264_videotoolbox -vf scale_vt=w=1280:h=960:format=nv12 -codec:a:0 aac -f hls out.m3u8");
+
+        Assert.True(HwTranslator.TryTranslate(argv, MakeNoneAgent(), out var translated, out var reason), reason);
+        Assert.Contains("scale=w=1280:h=960", translated);
+        Assert.DoesNotContain(translated, a => a.Contains("format=nv12", StringComparison.Ordinal));
     }
 }
