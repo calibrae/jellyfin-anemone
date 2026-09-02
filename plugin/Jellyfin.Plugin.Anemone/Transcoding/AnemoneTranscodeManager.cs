@@ -1,6 +1,10 @@
-// anemone: fork of MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs @ Jellyfin v10.11.0.
-// Kept as close to verbatim as possible; every deviation is marked with a "// anemone:" comment so this
-// can be re-based against the next Jellyfin minor. See RESEARCH.md and PROTOCOL.md for why/what.
+// anemone: this file is a derivative of Jellyfin's own
+// MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs @ v10.11.0 (jellyfin-server,
+// GPL-2.0-or-later) - kept as close to verbatim as possible, with every deviation marked by a
+// "// anemone:" comment so this can be re-based against the next Jellyfin minor. The unmodified upstream
+// file this was forked from is kept alongside it at docs/upstream-10.11.0/TranscodeManager.cs for that
+// rebase, and its presence is why this repository as a whole is licensed GPL-2.0-or-later. See
+// RESEARCH.md and PROTOCOL.md for why/what.
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
