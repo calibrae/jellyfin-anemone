@@ -37,11 +37,14 @@ polyp \
 
 On startup the agent:
 1. Runs `<ffmpeg> -version -hwaccels -encoders -decoders -filters` and parses the results.
-2. Checks every configured mount (exists, is a directory, is readable, is non-empty) -- a bad
-   mount is reported in `hello`, not a startup failure.
+2. Checks every configured mount (exists, is a directory, is readable, is non-empty) and detects
+   whether it's local storage (`mounts[].local`, see below) -- a bad mount is reported in `hello`,
+   not a startup failure.
 3. Connects to `server_url`, sends `hello`, and waits for `welcome` or `reject`.
 4. On `welcome`, starts sending `status` every `ping_interval_s` (or 10s) and on every job-count
-   change, and starts accepting `job` frames up to `max_sessions` concurrent.
+   change, and starts accepting `job` frames up to `max_sessions` concurrent. Each `status` frame
+   carries a fresh `load` sample (host load average, normalized by CPU count, clamped to 0..1;
+   omitted when it can't be read on this platform).
 
 On disconnect (server closes the socket, network drop, or `reject`), every running job is
 SIGKILLed immediately -- per `PROTOCOL.md`, job liveness is control-connection liveness -- and the
@@ -82,6 +85,21 @@ The two forms can be mixed in one list. `--mounts a,b` on the CLI always means i
 (no `server_path` mapping) and, when given, replaces the config file's `mounts` entirely. The
 agent's mount-readability probe always checks `path` (the agent-local one); path mapping/argv
 rewriting for job placement is the server's job, per `PROTOCOL.md`.
+
+The agent also reports `mounts[].local`: whether that tree is on storage attached to this agent,
+so the server can prefer an agent that can read the source without a network round trip.
+Auto-detected at startup (logged alongside `mount ok`/`mount not ok`) -- macOS checks `statfs(2)`'s
+`MNT_LOCAL` flag; Linux resolves the mount actually backing the path via the longest matching
+`/proc/self/mountinfo` entry and classifies its filesystem type (NFS/CIFS/SMB and similar network
+filesystems are not local; everything else, including an unrecognized type, is). Detection failure
+or an unsupported platform reports unknown (omitted on the wire), never a guess. Add `local = true`
+or `local = false` on a table-form `[[mounts]]` entry to override detection outright:
+
+```toml
+[[mounts]]
+path = "/mnt/das/data"
+local = true
+```
 
 #### `hwaccel` / `hwaccel_device`: hardware acceleration (protocol v2)
 
@@ -253,6 +271,8 @@ agent/
     config.rs     -- CLI (clap) + TOML file config, merged with CLI precedence
     probe.rs      -- ffmpeg -version/-hwaccels/-encoders/-decoders/-filters parsers, mount checks
     hwaccel.rs     -- hwaccel auto-detection (pure decision fn) + /dev/dri, nvidia-smi probes
+    mount_local.rs -- mounts[].local detection (pure classifier) + statfs/mountinfo probes
+    load.rs        -- status.load sampling (pure normalization) + /proc/loadavg, getloadavg probes
     protocol.rs    -- wire frame types (serde), stderr line splitter, ingest filename validation
     ws.rs          -- control WebSocket client: handshake, dispatch, status/ping, reconnect backoff
     job.rs          -- job supervisor: spawn/stdin/kill/exit per job, capacity enforcement

@@ -108,6 +108,11 @@ pub struct MountStatus {
     /// see `PROTOCOL.md` "Path mapping"). Omitted on the wire when equal to `path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_path: Option<String>,
+    /// Whether this tree is on storage attached to the agent -- reading its source then costs no
+    /// network round trip (protocol v2.1, see `PROTOCOL.md` "Placement inputs"). `true`/`false`
+    /// when known; omitted on the wire when unknown -- never guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
 }
 
 /// Hardware-acceleration profile an agent's ffmpeg jobs should be built for (protocol v2, see
@@ -291,6 +296,7 @@ mod tests {
                 path: "/Volumes/data".into(),
                 ok: true,
                 server_path: None,
+                local: None,
             }],
             max_sessions: 3,
         };
@@ -324,6 +330,7 @@ mod tests {
                 path: "/mnt/media".into(),
                 ok: true,
                 server_path: Some("/Volumes/data".into()),
+                local: Some(true),
             }],
             max_sessions: 3,
         };
@@ -331,14 +338,15 @@ mod tests {
         assert!(json.contains("\"hwaccel\":\"vaapi\""));
         assert!(json.contains("\"hwaccel_device\":\"/dev/dri/renderD128\""));
         assert!(json.contains("\"server_path\":\"/Volumes/data\""));
+        assert!(json.contains("\"local\":true"));
         let back: AgentMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, back);
     }
 
     #[test]
     fn hello_without_v2_fields_still_parses() {
-        // A v1-shaped hello (no hwaccel/hwaccel_device on the frame, no server_path on a mount)
-        // must still deserialize cleanly -- protocol v2 additions are backward compatible.
+        // A v1-shaped hello (no hwaccel/hwaccel_device on the frame, no server_path/local on a
+        // mount) must still deserialize cleanly -- protocol v2 additions are backward compatible.
         let text = r#"{"type":"hello","name":"trish","version":"0.1.0","platform":"macos-arm64",
             "ffmpeg":{"path":"/opt/anemone/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["videotoolbox"],
                       "encoders":["h264_videotoolbox"],"decoders":["h264"],"filters":["scale_vt"]},
@@ -354,17 +362,19 @@ mod tests {
                 assert_eq!(hwaccel, None);
                 assert_eq!(hwaccel_device, None);
                 assert_eq!(mounts[0].server_path, None);
+                assert_eq!(mounts[0].local, None);
             }
             other => panic!("expected Hello, got {other:?}"),
         }
     }
 
     #[test]
-    fn mount_status_omits_server_path_when_none() {
+    fn mount_status_omits_server_path_and_local_when_none() {
         let m = MountStatus {
             path: "/Volumes/data".into(),
             ok: true,
             server_path: None,
+            local: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(json, r#"{"path":"/Volumes/data","ok":true}"#);
@@ -376,12 +386,50 @@ mod tests {
             path: "/mnt/media".into(),
             ok: true,
             server_path: Some("/Volumes/data".into()),
+            local: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(
             json,
             r#"{"path":"/mnt/media","ok":true,"server_path":"/Volumes/data"}"#
         );
+    }
+
+    #[test]
+    fn mount_status_includes_local_true_when_set() {
+        let m = MountStatus {
+            path: "/mnt/das/data".into(),
+            ok: true,
+            server_path: None,
+            local: Some(true),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(json, r#"{"path":"/mnt/das/data","ok":true,"local":true}"#);
+        let back: MountStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+    }
+
+    #[test]
+    fn mount_status_includes_local_false_when_set() {
+        // Some(false) must NOT be dropped like None is -- "not local" is meaningful information.
+        let m = MountStatus {
+            path: "/mnt/offload".into(),
+            ok: true,
+            server_path: None,
+            local: Some(false),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"local\":false"));
+        let back: MountStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+    }
+
+    #[test]
+    fn mount_status_without_local_field_still_parses() {
+        // A server (or older agent build) that never sends "local" must still parse cleanly.
+        let text = r#"{"path":"/Volumes/data","ok":true}"#;
+        let m: MountStatus = serde_json::from_str(text).expect("mount status should parse");
+        assert_eq!(m.local, None);
     }
 
     #[test]
@@ -437,6 +485,7 @@ mod tests {
                 path: "/Volumes/data".into(),
                 ok: false,
                 server_path: None,
+                local: Some(false),
             }]),
         };
         let json = serde_json::to_string(&msg).unwrap();

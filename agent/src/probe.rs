@@ -179,6 +179,7 @@ pub fn check_mount(path: &str) -> MountStatus {
         path: path.to_string(),
         ok,
         server_path: None,
+        local: None,
     }
 }
 

@@ -61,7 +61,8 @@ pub struct Cli {
 }
 
 /// One `mounts` entry in the TOML file: either a bare string (identical path on agent and
-/// server, the pre-v2 shape) or a table with an optional `server_path` mapping.
+/// server, the pre-v2 shape) or a table with an optional `server_path` mapping and an optional
+/// `local` override.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 enum MountEntry {
@@ -70,6 +71,11 @@ enum MountEntry {
         path: String,
         #[serde(default)]
         server_path: Option<String>,
+        /// Wins over auto-detection when set -- an operator may know better than we do (e.g. an
+        /// iSCSI LUN or a network block device that looks local, or vice versa). See
+        /// `PROTOCOL.md` "Path mapping" -> `mounts[].local`.
+        #[serde(default)]
+        local: Option<bool>,
     },
 }
 
@@ -79,10 +85,19 @@ impl MountEntry {
             MountEntry::Simple(path) => MountSpec {
                 server_path: path.clone(),
                 path,
+                local: None,
             },
-            MountEntry::Full { path, server_path } => {
+            MountEntry::Full {
+                path,
+                server_path,
+                local,
+            } => {
                 let server_path = server_path.unwrap_or_else(|| path.clone());
-                MountSpec { path, server_path }
+                MountSpec {
+                    path,
+                    server_path,
+                    local,
+                }
             }
         }
     }
@@ -90,11 +105,13 @@ impl MountEntry {
 
 /// A configured mount, resolved to the pair the wire protocol wants: `path` (where the tree
 /// lives on this agent) and `server_path` (what the Jellyfin server calls the same tree,
-/// defaulting to `path` when the layout is identical).
+/// defaulting to `path` when the layout is identical), plus an optional `local` override that
+/// wins over auto-detection when set (`None` means "detect").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountSpec {
     pub path: String,
     pub server_path: String,
+    pub local: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -166,6 +183,7 @@ impl Config {
                 .map(|p| MountSpec {
                     path: p.clone(),
                     server_path: p.clone(),
+                    local: None,
                 })
                 .collect(),
             None => file_cfg
@@ -328,6 +346,7 @@ mod tests {
             vec![MountSpec {
                 path: "/Volumes/data".into(),
                 server_path: "/Volumes/data".into(),
+                local: None,
             }]
         );
     }
@@ -349,6 +368,7 @@ mod tests {
             vec![MountSpec {
                 path: "/mnt/media".into(),
                 server_path: "/Volumes/data".into(),
+                local: None,
             }]
         );
     }
@@ -369,6 +389,7 @@ mod tests {
             vec![MountSpec {
                 path: "/mnt/media".into(),
                 server_path: "/mnt/media".into(),
+                local: None,
             }]
         );
     }
@@ -387,10 +408,12 @@ mod tests {
                 MountSpec {
                     path: "/Volumes/data".into(),
                     server_path: "/Volumes/data".into(),
+                    local: None,
                 },
                 MountSpec {
                     path: "/mnt/media".into(),
                     server_path: "/Volumes/other".into(),
+                    local: None,
                 },
             ]
         );
@@ -406,6 +429,7 @@ mod tests {
             mounts: Some(vec![MountEntry::Full {
                 path: "/mnt/media".into(),
                 server_path: Some("/Volumes/data".into()),
+                local: Some(true),
             }]),
             ..Default::default()
         };
@@ -416,13 +440,77 @@ mod tests {
                 MountSpec {
                     path: "/a".into(),
                     server_path: "/a".into(),
+                    local: None,
                 },
                 MountSpec {
                     path: "/b".into(),
                     server_path: "/b".into(),
+                    local: None,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn table_mount_with_local_true_override() {
+        let toml_text = r#"
+            [[mounts]]
+            path = "/mnt/das/data"
+            local = true
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(
+            cfg.mounts,
+            vec![MountSpec {
+                path: "/mnt/das/data".into(),
+                server_path: "/mnt/das/data".into(),
+                local: Some(true),
+            }]
+        );
+    }
+
+    #[test]
+    fn table_mount_with_local_false_override() {
+        let toml_text = r#"
+            [[mounts]]
+            path = "/mnt/offload"
+            local = false
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(cfg.mounts[0].local, Some(false));
+    }
+
+    #[test]
+    fn table_mount_without_local_leaves_it_unset_for_detection() {
+        let toml_text = r#"
+            [[mounts]]
+            path = "/mnt/media"
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(cfg.mounts[0].local, None);
+    }
+
+    #[test]
+    fn bare_string_mount_never_sets_local_override() {
+        let toml_text = r#"mounts = ["/Volumes/data"]"#;
+        let file_cfg: FileConfig = toml::from_str(toml_text).unwrap();
+        let mut cli = empty_cli();
+        cli.server_url = Some("ws://file/".into());
+        cli.secret = Some("s".into());
+        let cfg = Config::merge(&cli, file_cfg).unwrap();
+        assert_eq!(cfg.mounts[0].local, None);
     }
 
     // --- hwaccel ---
