@@ -218,7 +218,14 @@ public static class RoutePlanner
         return result;
     }
 
-    private static IEnumerable<string> ExtractFilterNames(string filterGraph)
+    /// <summary>
+    /// Splits a <c>-vf</c>/<c>-af</c>/<c>-filter_complex</c> value into its filter names (dropping pad
+    /// labels and per-filter options). Exposed internally so <see cref="HwTranslator"/> can reuse the same
+    /// parsing instead of duplicating it.
+    /// </summary>
+    /// <param name="filterGraph">The raw filter-graph value token.</param>
+    /// <returns>The filter names, in order, pad labels and options stripped.</returns>
+    internal static IEnumerable<string> ExtractFilterNames(string filterGraph)
     {
         foreach (var rawSegment in filterGraph.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -266,7 +273,12 @@ public static class RoutePlanner
         }
     }
 
-    private static bool IsCodecFlag(string tok, out bool isVideo, out bool isAudio)
+    /// <summary>
+    /// True when <paramref name="tok"/> is a <c>-c:v*</c>/<c>-codec:v*</c> or <c>-c:a*</c>/<c>-codec:a*</c>
+    /// flag. Exposed internally so <see cref="HwTranslator"/> can reuse the same recognition instead of
+    /// duplicating it.
+    /// </summary>
+    internal static bool IsCodecFlag(string tok, out bool isVideo, out bool isAudio)
     {
         isVideo = false;
         isAudio = false;
