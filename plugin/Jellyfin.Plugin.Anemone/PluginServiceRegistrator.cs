@@ -18,6 +18,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddSingleton<AgentHub>();
+        serviceCollection.AddSingleton<AgentWebSocketEndpoint>();
+        serviceCollection.AddSingleton<IngestHandler>();
+        serviceCollection.AddSingleton<AnemoneListener>();
         serviceCollection.AddSingleton<IAgentRegistry>(sp => sp.GetRequiredService<AgentHub>());
         serviceCollection.AddSingleton<IIngestTokenStore, IngestTokenStore>();
         serviceCollection.AddSingleton<IJobRouter, JobRouter>();

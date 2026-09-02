@@ -31,6 +31,13 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Seconds without a status frame before an agent is considered dead.</summary>
     public int AgentDeadAfterSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// TCP port for the plugin's own listener (agent control websocket + segment ingest). 0 disables it.
+    /// It cannot be served from Jellyfin's own port: Jellyfin intercepts every websocket upgrade and
+    /// caps request bodies at 30 MB. <see cref="IngestBaseUrl"/> must point at this port.
+    /// </summary>
+    public int AgentListenPort { get; set; } = 8097;
+
     /// <summary>Require the agent's ffmpeg major.minor to match the server's.</summary>
     public bool RequireMatchingFfmpeg { get; set; } = true;
 }

@@ -9,18 +9,20 @@ public sealed class AnemoneHostedService : IHostedService, IDisposable
     private static readonly TimeSpan ReapInterval = TimeSpan.FromSeconds(5);
 
     private readonly AgentHub _hub;
+    private readonly AnemoneListener _listener;
     private readonly ILogger<AnemoneHostedService> _logger;
 
     private CancellationTokenSource? _cts;
     private Task? _reaperTask;
 
-    public AnemoneHostedService(AgentHub hub, ILogger<AnemoneHostedService> logger)
+    public AnemoneHostedService(AgentHub hub, AnemoneListener listener, ILogger<AnemoneHostedService> logger)
     {
         _hub = hub;
+        _listener = listener;
         _logger = logger;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         var config = Plugin.Instance?.Configuration;
         var pluginVersion = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "unknown";
@@ -42,13 +44,17 @@ public sealed class AnemoneHostedService : IHostedService, IDisposable
                 "Set it on the Anemone plugin config page.");
         }
 
+        // anemone: the listener is started from here rather than registered as its own IHostedService —
+        // only the first AddHostedService from a plugin registrator is actually started by the host.
+        await _listener.StartAsync(cancellationToken).ConfigureAwait(false);
+
         _cts = new CancellationTokenSource();
         _reaperTask = ReaperLoopAsync(_cts.Token);
-        return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        await _listener.StopAsync(cancellationToken).ConfigureAwait(false);
         _cts?.Cancel();
 
         if (_reaperTask is not null)

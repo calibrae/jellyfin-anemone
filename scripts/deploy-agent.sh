@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build polyp and push binary + config + launchd plist to a Mac agent host over ssh.
 # Usage: scripts/deploy-agent.sh <host> [server_ws_url] [ffmpeg_path]
-#   e.g. scripts/deploy-agent.sh trish ws://10.240.0.1:8096/Anemone/agents/ws /opt/anemone/ffmpeg
+#   e.g. scripts/deploy-agent.sh trish ws://10.240.0.1:8097/Anemone/agents/ws /opt/anemone/ffmpeg
 set -euo pipefail
 cd "$(dirname "$0")/.."
-HOST=${1:?host}; SERVER=${2:-ws://10.240.0.1:8096/Anemone/agents/ws}; FFMPEG=${3:-/opt/anemone/ffmpeg}
+HOST=${1:?host}; SERVER=${2:-ws://10.240.0.1:8097/Anemone/agents/ws}; FFMPEG=${3:-/opt/anemone/ffmpeg}
 export PATH="$HOME/.cargo/bin:$PATH"
 (cd agent && cargo build --release)
 ssh "$HOST" 'mkdir -p ~/anemone'

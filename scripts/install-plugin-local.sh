@@ -12,7 +12,15 @@ rm -rf "$PLUGINS"/Anemone_*
 cp -R "$SRC" "$PLUGINS/"
 echo "installed → $PLUGINS/Anemone_${VERSION}"
 if [ "${1:-}" != "--no-restart" ]; then
-  echo "restarting Jellyfin…"; curl -s -X POST http://127.0.0.1:8096/System/Restart -o /dev/null || true
-  for i in $(seq 1 30); do sleep 2; curl -sf http://127.0.0.1:8096/System/Ping >/dev/null 2>&1 && { echo "Jellyfin is back"; break; }; done
+  # NOTE: POST /System/Restart is an *in-process* soft restart on macOS. The CLR cannot unload an
+  # assembly, so Jellyfin keeps serving the plugin build it loaded first and your new DLL is ignored
+  # (it looks like your changes silently did nothing). The app must actually be quit and relaunched.
+  echo "restarting Jellyfin (full app relaunch)…"
+  osascript -e 'quit app "Jellyfin"' >/dev/null 2>&1 || pkill -f 'Jellyfin.app/Contents/MacOS/Jellyfin Server' || true
+  # wait for the wrapper app itself to be gone, otherwise `open` just re-activates a quitting app
+  for i in $(seq 1 25); do sleep 1; pgrep -f 'Jellyfin.app/Contents/MacOS/Jellyfin Server' >/dev/null || break; done
+  sleep 1
+  open -a Jellyfin
+  for i in $(seq 1 45); do sleep 2; curl -sf http://127.0.0.1:8096/System/Ping >/dev/null 2>&1 && { echo "Jellyfin is back"; break; }; done
 fi
 echo "check: grep -i 'anemone' \"\$HOME/Library/Application Support/jellyfin/log/log_$(date +%Y%m%d).log\" | tail"

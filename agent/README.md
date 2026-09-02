@@ -26,7 +26,7 @@ All config keys can also be passed as CLI flags, which override the config file:
 
 ```sh
 polyp \
-  --server-url ws://10.240.0.1:8096/Anemone/agents/ws \
+  --server-url ws://10.240.0.1:8097/Anemone/agents/ws \
   --secret "$(vault read -field=value secret/data/infra/anemone)" \
   --name trish \
   --ffmpeg /opt/anemone/ffmpeg \
@@ -53,7 +53,7 @@ SIGTERM/SIGINT trigger a graceful shutdown: kill all jobs, close the socket, exi
 
 | key | required | default | notes |
 |---|---|---|---|
-| `server_url` | yes (here or `--server-url`) | -- | e.g. `ws://10.240.0.1:8096/Anemone/agents/ws` |
+| `server_url` | yes (here or `--server-url`) | -- | e.g. `ws://10.240.0.1:8097/Anemone/agents/ws` |
 | `secret` | yes (here or `--secret`) | -- | sent as `Authorization: Bearer <secret>`; pull from Vault, don't commit it |
 | `name` | no | machine's short hostname | reported in `hello` |
 | `ffmpeg` | no | `ffmpeg` (resolved via `PATH`) | path to jellyfin-ffmpeg |

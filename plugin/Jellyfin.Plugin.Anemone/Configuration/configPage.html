@@ -44,6 +44,11 @@
                     <label class="inputLabel inputLabelUnfocused" for="IngestBaseUrl">Ingest base URL</label>
                     <input is="emby-input" type="text" id="IngestBaseUrl" placeholder="http://10.240.0.1:8096" />
                     <div class="fieldDescription">Absolute base URL agents reach this server on for segment uploads. Leave empty to derive it automatically from the server's local API URL.</div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="AgentListenPort">Agent listener port</label>
+                    <input is="emby-input" type="number" id="AgentListenPort" min="0" max="65535" />
+                    <div class="fieldDescription">Port for the plugin's own listener (agent control channel + segment ingest). It cannot share Jellyfin's port. 0 disables remote transcoding. The ingest base URL above must point at this port.</div>
+                </div>
                 </div>
 
                 <div class="checkboxContainer checkboxContainer-withDescription">
@@ -137,6 +142,7 @@
                     page.querySelector("#DryRun").checked = !!config.DryRun;
                     page.querySelector("#SharedSecret").value = config.SharedSecret || "";
                     page.querySelector("#IngestBaseUrl").value = config.IngestBaseUrl || "";
+                page.querySelector("#AgentListenPort").value = config.AgentListenPort;
                     page.querySelector("#PreferRemote").checked = !!config.PreferRemote;
                     page.querySelector("#LocalMaxSessions").value = config.LocalMaxSessions;
                     page.querySelector("#AgentStartTimeoutSeconds").value = config.AgentStartTimeoutSeconds;
@@ -153,6 +159,7 @@
                     config.DryRun = page.querySelector("#DryRun").checked;
                     config.SharedSecret = page.querySelector("#SharedSecret").value;
                     config.IngestBaseUrl = page.querySelector("#IngestBaseUrl").value;
+                config.AgentListenPort = parseInt(page.querySelector("#AgentListenPort").value, 10) || 0;
                     config.PreferRemote = page.querySelector("#PreferRemote").checked;
                     config.LocalMaxSessions = parseInt(page.querySelector("#LocalMaxSessions").value, 10) || 0;
                     config.AgentStartTimeoutSeconds = parseInt(page.querySelector("#AgentStartTimeoutSeconds").value, 10) || 0;

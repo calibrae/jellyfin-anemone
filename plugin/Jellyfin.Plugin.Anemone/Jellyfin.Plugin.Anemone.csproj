@@ -14,16 +14,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.0" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.0" />
     <!-- anemone: needed for PermissionKind / UserEntityExtensions.HasPermission used by the TranscodeManager fork.
          Jellyfin's server process already loads these assemblies (they're a transitive dependency of
          Jellyfin.Controller's own runtime graph) - ExcludeAssets=runtime keeps them out of our bin/ output,
          same effect as CopyLocalLockFileAssemblies=false above, belt and suspenders. -->
-    <PackageReference Include="Jellyfin.Data" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Data" Version="10.11.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.0">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
   </ItemGroup>

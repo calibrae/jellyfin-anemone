@@ -4,7 +4,7 @@
 # e.g. `polyp --config /etc/polyp.toml --max-sessions 4`. CLI flags win.
 
 # Control WebSocket URL of the Jellyfin cluster plugin. Required (here or via --server-url).
-server_url = "ws://10.240.0.1:8096/Anemone/agents/ws"
+server_url = "ws://10.240.0.1:8097/Anemone/agents/ws"
 
 # Shared secret, sent as `Authorization: Bearer <secret>`. Required (here or via --secret).
 # Pull this from Vault (infra/anemone) rather than committing it.

@@ -20,14 +20,14 @@ Detailed agent reports (file:line citations, experiments) live in `research/`:
 - **Wrapper-binary approach is a non-starter on this box**: the Mac launcher always passes
   `--ffmpeg <bundled>` and CLI beats `JELLYFIN_FFMPEG` (`Program.cs:340-341`); the app bundle is
   signed + hardened runtime, so swapping the binary breaks the seal.
-- **Output path = ffmpeg pushes HLS segments itself with `-f hls -method PUT`** to a plugin
-  endpoint, verified live: one chunked PUT per segment, `-headers` on every request,
+- **Output path = ffmpeg pushes HLS segments itself with `-f hls -method PUT`** to the plugin's
+  own listener (port 8097 — *not* Jellyfin's port; see PROTOCOL.md), verified live: one chunked PUT per segment, `-headers` on every request,
   `-http_persistent 1` keep-alive. Receiver writes `.part` + rename → atomic files at the exact
   `<md5>%d.ts` paths Jellyfin polls for. Jellyfin serves segment N once N+1 exists — unchanged.
 - **Input path = agent mounts the same SMB share at the same path** (`/Volumes/data` from
   polnareff). Media never transits speedwagon. HTTP input from Jellyfin (`/Videos/{id}/stream?static=true`)
   is a verified fallback (Range seek works, 2 requests per `-ss`).
-- **Control = one WebSocket per agent** carrying job spec, stdin bytes (`q`/`p`/`u`), stderr
+- **Control = one WebSocket per agent, on the plugin's own port** (Jellyfin hijacks every upgrade on its own port) carrying job spec, stdin bytes (`q`/`p`/`u`), stderr
   lines back, exit code, heartbeat. Connection liveness drives job teardown (ClusterPlex lesson).
 - **Agent = Rust daemon running the official jellyfin-ffmpeg portable build** (`macarm64-gpl`).
   Stock ffmpeg silently no-ops Jellyfin's throttle (`p`/`u` is jellyfin-ffmpeg patch 0028).

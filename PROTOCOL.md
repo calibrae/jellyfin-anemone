@@ -3,10 +3,11 @@
 Two channels between the Jellyfin plugin ("server") and each `polyp` ("agent"):
 
 1. **Control** — one WebSocket per agent, opened *by the agent* to
-   `ws(s)://<jellyfin>/Anemone/agents/ws`, upgrade request carrying `Authorization: Bearer <shared secret>`.
+   `ws://<server>:<AgentListenPort>/Anemone/agents/ws` (default port 8097), upgrade request carrying
+   `Authorization: Bearer <shared secret>`.
    Text frames, one JSON object per frame, `type` discriminator. Either side may send `ping`; the peer answers `pong`.
 2. **Ingest** — ffmpeg on the agent uploads HLS output with `HTTP PUT` to
-   `<ingest_base>/Anemone/ingest/<job_id>/<filename>` carrying `Authorization: Bearer <job token>`
+   `<ingest_base>/Anemone/ingest/<job_id>/<filename>` (`ingest_base` is the same listener, from `welcome`) carrying `Authorization: Bearer <job token>`
    (chunked transfer, one PUT per segment; `-http_persistent 1`). The server writes `<filename>.part` in the job's
    target directory and renames on completion. Filenames are validated against the job's prefix.
 
@@ -93,3 +94,21 @@ exist before answering the client; ffmpeg rewrites an *event* playlist after eve
 `-hls_playlist_type vod` and Jellyfin then waits for the requested **segment** (`state.WaitForPath`); a *vod*
 playlist is only written when ffmpeg finishes. Consequence: the ingest endpoint must store the `.m3u8` PUTs too, not
 just segments — otherwise the initial start hangs.
+
+
+## Why both channels live on the plugin's own port (verified live 2026-09-02)
+
+Neither channel can be served from Jellyfin's own HTTP port:
+
+- **WebSocket.** `Jellyfin.Server/Startup.cs:221` (10.11.0) calls `UseWebSocketHandler()` *before*
+  `UseEndpoints/MapControllers` (:230), and that middleware claims **every** upgrade request regardless of
+  path, answering anything without a Jellyfin API token with `403 "Token is required"`. A plugin
+  `ControllerBase` therefore never sees an agent upgrade — measured: a plain `GET` with our bearer reaches
+  the controller (400), the same request with `Upgrade: websocket` gets 403. `IStartupFilter` does not help
+  either: plugin services are registered too late to affect the pipeline (the filter's `Configure` is never
+  invoked).
+- **Ingest.** Jellyfin never raises Kestrel's 30 MB request-body cap and runs its auth middleware over
+  everything hosted in-process.
+
+So the plugin runs its own Kestrel (`AnemoneListener`, `AgentListenPort`, default 8097) with
+`MaxRequestBodySize = null`. `IngestBaseUrl` must point at that port.
