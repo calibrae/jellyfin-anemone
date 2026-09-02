@@ -196,17 +196,28 @@ public static class HwTranslator
             return false;
         }
 
-        if (!TableProfiles.Contains(target, StringComparer.OrdinalIgnoreCase))
-        {
-            reason = $"no translation table entry for target profile '{target}'";
-            return false;
-        }
-
         var result = new List<string>(argv);
         var isRemux = IsRemux(result);
 
-        if (!isRemux)
+        // A remux copies the video stream: no decoder, encoder or scaler runs, so no video hardware is
+        // engaged and the job is portable to ANY agent — including one whose profile we have no
+        // translation table for (e.g. a videotoolbox agent, which is only ever a *source* profile here).
+        // Requiring a table entry for these would refuse the most portable job we have. Any hwaccel-init
+        // tokens the server emitted are unused by a copy, and would fail outright on hardware that does
+        // not have them, so they are dropped rather than carried across.
+        if (isRemux)
         {
+            DropHwInitTokens(result);
+            DropPrioSpeed(result);
+        }
+        else
+        {
+            if (!TableProfiles.Contains(target, StringComparer.OrdinalIgnoreCase))
+            {
+                reason = $"no translation table entry for target profile '{target}'";
+                return false;
+            }
+
             if (!RewriteDeviceInit(result, target, agent, out reason))
             {
                 return false;
@@ -538,6 +549,21 @@ public static class HwTranslator
         return (w, h);
     }
 
+    /// <summary>
+    /// Remove every <c>-init_hw_device</c>/<c>-hwaccel</c>/<c>-hwaccel_output_format</c> pair. Used for
+    /// remuxes, where the tokens are dead weight that would still fail on hardware lacking that device.
+    /// </summary>
+    private static void DropHwInitTokens(List<string> argv)
+    {
+        for (var i = argv.Count - 2; i >= 0; i--)
+        {
+            if (argv[i] is "-init_hw_device" or "-hwaccel" or "-hwaccel_output_format")
+            {
+                argv.RemoveRange(i, 2);
+            }
+        }
+    }
+
     private static void DropPrioSpeed(List<string> argv)
     {
         for (var i = argv.Count - 2; i >= 0; i--)
@@ -559,6 +585,13 @@ public static class HwTranslator
             }
 
             if (!string.Equals(argv[i + 1], "aac_at", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // aac_at is AudioToolbox: macOS only, and better than plain aac where it exists. Only map it
+            // away for agents that cannot run it.
+            if (ContainsIgnoreCase(agent.Encoders, "aac_at"))
             {
                 continue;
             }

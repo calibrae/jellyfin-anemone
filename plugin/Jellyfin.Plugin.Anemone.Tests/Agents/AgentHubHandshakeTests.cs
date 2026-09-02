@@ -40,7 +40,7 @@ public class AgentHubHandshakeTests
         socket.EnqueueIncoming(Frame.Serialize(hello));
 
         using var cts = new CancellationTokenSource();
-        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, cts.Token);
+        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, IPAddress.Parse("10.10.0.2"), cts.Token);
 
         using var readCts = new CancellationTokenSource(Timeout);
         var welcomeJson = await socket.Outgoing.ReadAsync(readCts.Token);
@@ -85,7 +85,7 @@ public class AgentHubHandshakeTests
         socket.EnqueueIncoming(Frame.Serialize(hello));
 
         using var cts = new CancellationTokenSource();
-        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, cts.Token);
+        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, IPAddress.Parse("10.10.0.2"), cts.Token);
 
         using var readCts = new CancellationTokenSource(Timeout);
         await socket.Outgoing.ReadAsync(readCts.Token);
@@ -118,7 +118,7 @@ public class AgentHubHandshakeTests
         socket.EnqueueIncoming(Frame.Serialize(hello));
 
         using var cts = new CancellationTokenSource();
-        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, cts.Token);
+        var runTask = hub.RunConnectionAsync(socket, IPAddress.Loopback, IPAddress.Parse("10.10.0.2"), cts.Token);
 
         using var readCts = new CancellationTokenSource(Timeout);
         await socket.Outgoing.ReadAsync(readCts.Token);
@@ -139,7 +139,7 @@ public class AgentHubHandshakeTests
         var socket = new FakeAgentWebSocket();
         socket.EnqueueIncoming(Frame.Serialize(new PingFrame())); // not a hello
 
-        await hub.RunConnectionAsync(socket, IPAddress.Loopback, CancellationToken.None).WaitAsync(Timeout);
+        await hub.RunConnectionAsync(socket, IPAddress.Loopback, IPAddress.Parse("10.10.0.2"), CancellationToken.None).WaitAsync(Timeout);
 
         Assert.Empty(hub.Agents);
     }
@@ -158,7 +158,7 @@ public class AgentHubHandshakeTests
             3);
         socket.EnqueueIncoming(Frame.Serialize(hello));
 
-        await hub.RunConnectionAsync(socket, IPAddress.Loopback, CancellationToken.None).WaitAsync(Timeout);
+        await hub.RunConnectionAsync(socket, IPAddress.Loopback, IPAddress.Parse("10.10.0.2"), CancellationToken.None).WaitAsync(Timeout);
 
         Assert.Empty(hub.Agents);
     }

@@ -42,7 +42,7 @@ public sealed class AgentHub : IAgentRegistry
     /// replies <c>welcome</c>/<c>reject</c>, registers the agent (replacing any same-name connection), then
     /// blocks running the connection until it ends. Removes the agent from the registry on return.
     /// </summary>
-    public async Task RunConnectionAsync(WebSocket socket, IPAddress? remoteAddress, CancellationToken cancellationToken)
+    public async Task RunConnectionAsync(WebSocket socket, IPAddress? remoteAddress, IPAddress? localAddress, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(socket);
 
@@ -117,7 +117,7 @@ public sealed class AgentHub : IAgentRegistry
 
         var welcome = new WelcomeFrame(
             new ServerInfo(_appHost.ApplicationVersionString, _mediaEncoder.EncoderVersion?.ToString() ?? string.Empty),
-            ResolveIngestBase(),
+            ResolveIngestBase(localAddress),
             PingIntervalSeconds);
 
         var connection = new AgentConnection(socket, info, PingIntervalSeconds, _loggerFactory.CreateLogger<AgentConnection>());
@@ -244,13 +244,32 @@ public sealed class AgentHub : IAgentRegistry
             .ToList();
     }
 
-    /// <summary>Absolute base URL agents should reach this server on, trimmed of a trailing slash.</summary>
-    public string ResolveIngestBase()
+    /// <summary>
+    /// Absolute base URL an agent should upload segments to, trimmed of a trailing slash.
+    /// </summary>
+    /// <param name="localAddress">
+    /// The local endpoint of that agent's own control connection, i.e. the address it actually reached us
+    /// on. A fleet is rarely single-homed: trish reaches this server over a Thunderbolt link (10.240.0.1)
+    /// that abbacchio cannot route to at all, while abbacchio arrives on the LAN address. Answering each
+    /// agent with the interface it already used keeps every agent on its fastest working path and needs no
+    /// per-agent configuration. <see cref="PluginConfiguration.IngestBaseUrl"/> overrides this when the
+    /// server is behind NAT or a proxy and the local address is not what agents can reach.
+    /// </param>
+    public string ResolveIngestBase(IPAddress? localAddress = null)
     {
         var configured = Plugin.Instance?.Configuration.IngestBaseUrl;
         if (!string.IsNullOrWhiteSpace(configured))
         {
             return configured.TrimEnd('/');
+        }
+
+        var port = Plugin.Instance?.Configuration.AgentListenPort ?? 0;
+        if (localAddress is not null && port > 0 && !IPAddress.IsLoopback(localAddress))
+        {
+            var host = localAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                ? $"[{localAddress}]"
+                : localAddress.ToString();
+            return $"http://{host}:{port}";
         }
 
         try

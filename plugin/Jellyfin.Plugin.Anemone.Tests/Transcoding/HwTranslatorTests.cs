@@ -205,13 +205,23 @@ public class HwTranslatorTests
         var ok = HwTranslator.TryTranslate(argv, agent, out var translated, out var reason);
         Assert.True(ok, reason);
 
-        // "-codec:v:0 copy" needs no video translation at all (PROTOCOL.md): the videotoolbox hwaccel-init
-        // tokens and the mp4toannexb bitstream filter are untouched, byte-for-byte - only aac_at is mapped.
+        // "-codec:v:0 copy" needs no video translation: the stream is copied, so no encoder or scaler is
+        // rewritten and the bitstream filter is untouched. The videotoolbox hwaccel-init tokens ARE
+        // removed though - nothing consumes them in a copy, and ffmpeg on a box without VideoToolbox
+        // fails outright on "-hwaccel videotoolbox" rather than ignoring it.
         var expected = new List<string>(argv);
         expected[expected.IndexOf("-codec:a:0") + 1] = "aac";
+        foreach (var flag in new[] { "-init_hw_device", "-hwaccel", "-hwaccel_output_format" })
+        {
+            int at;
+            while ((at = expected.IndexOf(flag)) >= 0)
+            {
+                expected.RemoveRange(at, 2);
+            }
+        }
 
         Assert.Equal(expected, translated);
-        Assert.Contains("videotoolbox", translated); // hwaccel tokens genuinely untouched, not merely equal by coincidence
+        Assert.DoesNotContain("videotoolbox", translated);
         Assert.Contains("h264_mp4toannexb", translated);
     }
 
@@ -487,5 +497,43 @@ public class HwTranslatorTests
         List<string> argv = ["-i", "file:/x.mkv", "-codec:v:0", "libx264", "-f", "hls", "-y", "out.m3u8"];
 
         Assert.Equal("none", HwTranslator.IdentifySourceProfile(argv));
+    }
+
+    // A remux (video copied) engages no video hardware, so it must stay routable to EVERY agent —
+    // including a videotoolbox one, which the translation table only ever knows as a source profile.
+    // Regression: the table-entry check used to run before the remux branch and refused these outright.
+    [Fact]
+    public void RemuxRoutesToVideoToolboxAgentEvenThoughItIsNotATranslationTarget()
+    {
+        var argv = ArgumentLine.Split(
+            "-analyzeduration 200M -f matroska -i file:/Volumes/data/s/e.mkv " +
+            "-map 0:0 -map 0:1 -codec:v:0 copy -bsf:v h264_mp4toannexb -codec:a:0 aac_at -ac 2 -f hls");
+
+        var agent = MakeVideotoolboxAgent();
+
+        Assert.True(HwTranslator.TryTranslate(argv, agent, out var translated, out var reason), reason);
+        Assert.Contains("copy", translated);
+        Assert.Contains("aac_at", translated);
+    }
+
+    // The same remux sent to Linux/VAAPI: aac_at does not exist off macOS and must become aac.
+    [Fact]
+    public void RemuxToVaapiAgentMapsAudioAndDropsUnusedHwaccelTokens()
+    {
+        var argv = ArgumentLine.Split(
+            "-analyzeduration 200M -init_hw_device videotoolbox=vt -hwaccel videotoolbox -f matroska " +
+            "-i file:/Volumes/data/s/e.mkv -codec:v:0 copy -codec:a:0 aac_at -ac 2 -f hls");
+
+        var agent = MakeVaapiAgent();
+
+        Assert.True(HwTranslator.TryTranslate(argv, agent, out var translated, out var reason), reason);
+        Assert.Contains("aac", translated);
+        Assert.DoesNotContain("aac_at", translated);
+        Assert.Contains("copy", translated);
+
+        // the videotoolbox device tokens are dead weight for a copy and would fail on Linux
+        Assert.DoesNotContain("-init_hw_device", translated);
+        Assert.DoesNotContain("-hwaccel", translated);
+        Assert.DoesNotContain("videotoolbox", translated);
     }
 }

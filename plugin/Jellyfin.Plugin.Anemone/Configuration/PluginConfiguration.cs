@@ -14,8 +14,10 @@ public class PluginConfiguration : BasePluginConfiguration
     public string SharedSecret { get; set; } = string.Empty;
 
     /// <summary>
-    /// Absolute base URL agents reach this server on for segment uploads (e.g. http://10.240.0.1:8096).
-    /// Empty = derive from the server's local API URL.
+    /// Absolute base URL agents reach this server on for segment uploads (e.g. http://10.240.0.1:8097).
+    /// Leave EMPTY (recommended): each agent is then told the address it actually reached us on, so a
+    /// Thunderbolt-attached agent keeps using the Thunderbolt link while a LAN agent uses the LAN. Set it
+    /// only when that address is not what agents can reach (NAT, reverse proxy) — it applies to ALL agents.
     /// </summary>
     public string IngestBaseUrl { get; set; } = string.Empty;
 

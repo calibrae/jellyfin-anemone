@@ -57,7 +57,7 @@ public sealed class AgentWebSocketEndpoint
 
         using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
         _logger.LogInformation("anemone: agent websocket accepted from {Remote}", remote);
-        await _hub.RunConnectionAsync(socket, remote, context.RequestAborted).ConfigureAwait(false);
+        await _hub.RunConnectionAsync(socket, remote, context.Connection.LocalIpAddress, context.RequestAborted).ConfigureAwait(false);
     }
 
     private static bool TryGetBearerToken(HttpContext context, out string token)
