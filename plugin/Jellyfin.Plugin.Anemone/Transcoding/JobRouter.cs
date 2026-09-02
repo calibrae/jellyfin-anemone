@@ -73,36 +73,72 @@ public sealed class JobRouter : IJobRouter
             return null;
         }
 
-        var agent = _registry.Pick(analysis.Requirements);
-        if (agent is null)
+        var candidates = _registry.Candidates(analysis.Requirements);
+        if (candidates.Count == 0)
         {
             _logger.LogDebug(
-                "anemone: not routing {Path}: no agent satisfies requirements (hwaccels=[{Hwaccels}], encoders=[{Encoders}], decoders=[{Decoders}], filters=[{Filters}])",
-                outputPath,
-                string.Join(',', analysis.Requirements.Hwaccels),
-                string.Join(',', analysis.Requirements.Encoders),
-                string.Join(',', analysis.Requirements.Decoders),
-                string.Join(',', analysis.Requirements.Filters));
+                "anemone: not routing {Path}: no candidate agent (connected, alive, free capacity, mounts covering input, ffmpeg-version policy)",
+                outputPath);
             return null;
         }
 
-        var jobId = Guid.NewGuid().ToString("N");
-        var targetDirectory = Path.GetDirectoryName(outputPath)
-            ?? throw new ArgumentException($"Provided path ({outputPath}) is not valid.", nameof(outputPath));
-        var filePrefix = Path.GetFileNameWithoutExtension(outputPath);
-        var token = _tokenStore.Issue(jobId, targetDirectory, filePrefix);
+        var allowHwProfileTranslation = Plugin.Instance?.Configuration.AllowHwProfileTranslation ?? true;
+        var sourceProfile = HwTranslator.IdentifySourceProfile(argv);
 
-        var configuredBase = Plugin.Instance?.Configuration.IngestBaseUrl;
-        var ingestBase = !string.IsNullOrWhiteSpace(configuredBase)
-            ? configuredBase!
-            : _applicationHost.GetApiUrlForLocalAccess(null, false);
-        ingestBase = ingestBase.TrimEnd('/');
+        foreach (var candidate in candidates)
+        {
+            if (!IsProfileTranslationAllowed(candidate.Info.Hwaccel, sourceProfile, allowHwProfileTranslation))
+            {
+                _logger.LogDebug(
+                    "anemone: rejecting candidate {Name}: hw profile translation disabled and agent profile '{AgentProfile}' != source '{SourceProfile}'",
+                    candidate.Info.Name,
+                    candidate.Info.Hwaccel,
+                    sourceProfile);
+                continue;
+            }
 
-        var rewritten = RoutePlanner.Rewrite(argv, ingestBase, jobId, token);
+            if (!MountPathMapper.TryMapInputPaths(argv, candidate.Info.Mounts, out var pathMapped, out var pathReason))
+            {
+                _logger.LogDebug("anemone: rejecting candidate {Name}: {Reason}", candidate.Info.Name, pathReason);
+                continue;
+            }
 
-        var reason = $"agent '{agent.Info.Name}' (server ffmpeg {_mediaEncoder.EncoderVersion}, hwaccels=[{string.Join(',', analysis.Requirements.Hwaccels)}], encoders=[{string.Join(',', analysis.Requirements.Encoders)}])";
-        var spec = new RemoteJobSpec(jobId, rewritten, token, $"Transcode {filePrefix}");
+            if (!HwTranslator.TryTranslate(pathMapped, candidate.Info, out var translatedArgv, out var hwReason))
+            {
+                _logger.LogDebug("anemone: rejecting candidate {Name}: {Reason}", candidate.Info.Name, hwReason);
+                continue;
+            }
 
-        return new RoutePlan(agent, spec, targetDirectory, filePrefix, reason);
+            var jobId = Guid.NewGuid().ToString("N");
+            var targetDirectory = Path.GetDirectoryName(outputPath)
+                ?? throw new ArgumentException($"Provided path ({outputPath}) is not valid.", nameof(outputPath));
+            var filePrefix = Path.GetFileNameWithoutExtension(outputPath);
+            var token = _tokenStore.Issue(jobId, targetDirectory, filePrefix);
+
+            var configuredBase = Plugin.Instance?.Configuration.IngestBaseUrl;
+            var ingestBase = !string.IsNullOrWhiteSpace(configuredBase)
+                ? configuredBase!
+                : _applicationHost.GetApiUrlForLocalAccess(null, false);
+            ingestBase = ingestBase.TrimEnd('/');
+
+            var rewritten = RoutePlanner.Rewrite(translatedArgv, ingestBase, jobId, token);
+
+            var reason = $"agent '{candidate.Info.Name}' (server ffmpeg {_mediaEncoder.EncoderVersion}, source hw profile '{sourceProfile}' -> agent hw profile '{candidate.Info.Hwaccel}': {hwReason})";
+            var spec = new RemoteJobSpec(jobId, rewritten, token, $"Transcode {filePrefix}");
+
+            return new RoutePlan(candidate, spec, targetDirectory, filePrefix, reason);
+        }
+
+        _logger.LogDebug("anemone: not routing {Path}: no candidate could run the job (path mapping / hw translation all failed)", outputPath);
+        return null;
     }
+
+    /// <summary>
+    /// The <see cref="Configuration.PluginConfiguration.AllowHwProfileTranslation"/> gate: when translation
+    /// is disallowed, only a candidate whose profile already matches the source is eligible. Factored out
+    /// as a pure function (mirrors <see cref="Agents.AgentHub.CandidatesFrom"/>'s split) so it's unit-testable
+    /// without a live <see cref="Plugin.Instance"/>.
+    /// </summary>
+    internal static bool IsProfileTranslationAllowed(string agentProfile, string sourceProfile, bool allowHwProfileTranslation)
+        => allowHwProfileTranslation || string.Equals(agentProfile, sourceProfile, StringComparison.OrdinalIgnoreCase);
 }
