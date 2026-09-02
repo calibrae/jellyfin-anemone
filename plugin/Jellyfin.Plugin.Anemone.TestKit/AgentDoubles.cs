@@ -101,6 +101,10 @@ public sealed class FakeAgentConnection : IAgentConnection
 
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
 
+    public double? MeasuredSpeed { get; set; }
+
+    public double? Load { get; set; }
+
     public List<StartedJob> StartedJobs { get; } = [];
 
     /// <summary>When set, <see cref="StartJobAsync"/> throws this instead of starting anything (models a transport-level start failure).</summary>

@@ -25,6 +25,7 @@ public sealed class AgentConnection : IAgentConnection
     });
 
     private readonly ConcurrentDictionary<string, PendingJob> _pendingJobs = new();
+    private readonly SpeedTracker _speedTracker = new();
 
     private AgentInfo _info;
     private CancellationTokenSource? _runCts;
@@ -49,6 +50,12 @@ public sealed class AgentConnection : IAgentConnection
     public bool IsConnected { get; private set; }
 
     public DateTimeOffset LastSeen { get; private set; }
+
+    /// <inheritdoc />
+    public double? MeasuredSpeed => _speedTracker.Average;
+
+    /// <inheritdoc />
+    public double? Load { get; private set; }
 
     /// <summary>Reads one complete text message from a WebSocket (handling fragmentation). Null = socket closed.</summary>
     internal static async Task<string?> ReceiveTextMessageAsync(WebSocket socket, CancellationToken cancellationToken)
@@ -365,9 +372,14 @@ public sealed class AgentConnection : IAgentConnection
     private void HandleStatus(StatusFrame status)
     {
         ActiveJobs = status.Active;
+        if (status.Load is { } load)
+        {
+            Load = load;
+        }
+
         if (status.Mounts is { Count: > 0 })
         {
-            _info = _info with { Mounts = status.Mounts.Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath)).ToList() };
+            _info = _info with { Mounts = status.Mounts.Select(m => new AgentMount(m.Path, m.Ok, m.ServerPath, m.Local)).ToList() };
         }
     }
 
@@ -389,6 +401,14 @@ public sealed class AgentConnection : IAgentConnection
         if (_pendingJobs.TryGetValue(line.Id, out var entry))
         {
             entry.Sink.OnStderrLine(line.Line);
+        }
+
+        // anemone: throughput measurement piggybacks on the same stderr lines Jellyfin's progress parser
+        // already consumes (see PROTOCOL.md "Placement inputs (v2.1)") - tracked per connection, not per
+        // job, so it averages across every job this agent has run since it (re)connected.
+        if (SpeedTracker.TryParseSpeed(line.Line, out var speed))
+        {
+            _speedTracker.Observe(speed);
         }
     }
 

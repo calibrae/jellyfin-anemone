@@ -25,8 +25,12 @@ public sealed record AgentInfo(
 /// same tree (optional on the wire; defaults to <paramref name="Path"/> when the agent's layout is
 /// identical to the server's) - see PROTOCOL.md "Path mapping". Use <see cref="EffectiveServerPath"/>
 /// for placement/rewriting, never <see cref="ServerPath"/> directly, so the default is applied uniformly.
+/// <paramref name="Local"/> is <c>true</c> when this tree sits on storage attached to the agent itself (no
+/// network round trip to read a source from it); optional and <c>null</c> when the agent didn't say - see
+/// PROTOCOL.md "Placement inputs (v2.1)". Placement ranking treats <c>null</c> as strictly between a known
+/// <c>true</c> and a known <c>false</c>, never as either.
 /// </summary>
-public sealed record AgentMount(string Path, bool Ok, string? ServerPath = null)
+public sealed record AgentMount(string Path, bool Ok, string? ServerPath = null, bool? Local = null)
 {
     /// <summary>What the server calls this tree: <see cref="ServerPath"/> when announced, otherwise <see cref="Path"/>.</summary>
     public string EffectiveServerPath => string.IsNullOrEmpty(ServerPath) ? Path : ServerPath;
@@ -94,6 +98,17 @@ public interface IAgentConnection
     bool IsConnected { get; }
 
     DateTimeOffset LastSeen { get; }
+
+    /// <summary>
+    /// This agent's own rolling-average ffmpeg <c>speed=</c> factor (realtime multiplier: 2.0 = twice as
+    /// fast as playback needs), from stderr lines already flowing over the control channel. Null until the
+    /// agent has run at least one job that produced a parseable <c>speed=</c> value - see
+    /// PROTOCOL.md "Placement inputs (v2.1)" and <see cref="Agents.SpeedTracker"/>.
+    /// </summary>
+    double? MeasuredSpeed { get; }
+
+    /// <summary>The agent's own last-reported <c>status.load</c> (0..1), advisory. Null when never reported.</summary>
+    double? Load { get; }
 
     /// <summary>Send a job; resolves when the agent acknowledged with <c>started</c> (or faults on <c>exit</c>/timeout).</summary>
     Task<IRemoteJob> StartJobAsync(RemoteJobSpec spec, IRemoteJobSink sink, CancellationToken cancellationToken);
