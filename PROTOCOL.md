@@ -18,8 +18,8 @@ unknown `type` values are logged and ignored.
 
 | type | fields | notes |
 |---|---|---|
-| `hello` | `name`, `version`, `platform` (`macos-arm64`, `linux-x86_64`, …), `ffmpeg: {path, version, hwaccels[], encoders[], decoders[], filters[]}`, `mounts: [{path, ok}]`, `max_sessions` | first frame after connect; server answers `welcome` or `reject` and closes |
-| `status` | `active` (int), `load` (0..1, optional), `mounts` (optional refresh) | sent on change and at least every 10 s (doubles as heartbeat) |
+| `hello` | `name`, `version`, `platform` (`macos-arm64`, `linux-x86_64`, …), `ffmpeg: {path, version, hwaccels[], encoders[], decoders[], filters[]}`, `mounts: [{path, ok, server_path?}]`, `max_sessions`, `hwaccel?`, `hwaccel_device?` | first frame after connect; server answers `welcome` or `reject` and closes |
+| `status` | `active` (int), `load` (0..1, optional), `mounts` (optional refresh, same shape as in `hello`) | sent on change and at least every 10 s (doubles as heartbeat) |
 | `started` | `id`, `pid` | ffmpeg spawned |
 | `stderr` | `id`, `line` | one frame per stderr line, verbatim, no trailing newline; ffmpeg progress lines (`frame=… time=…`) included — the server feeds them to Jellyfin's log/progress parser |
 | `exit` | `id`, `code` (int, -1 if killed by signal), `error` (string, optional) | terminal; agent forgets the job |
@@ -112,3 +112,65 @@ Neither channel can be served from Jellyfin's own HTTP port:
 
 So the plugin runs its own Kestrel (`AnemoneListener`, `AgentListenPort`, default 8097) with
 `MaxRequestBodySize = null`. `IngestBaseUrl` must point at that port.
+
+
+---
+
+# Protocol v2 additions (2026-09-02)
+
+Both are backward compatible: an agent that omits the new fields behaves exactly as before.
+
+## Path mapping — `mounts[].server_path`
+
+The media tree rarely has the same path everywhere: the server may see `/Volumes/data` (SMB) while a
+Linux agent NFS-mounts the same tree at `/mnt/media`. Each mount entry therefore carries two paths:
+
+| field | meaning |
+|---|---|
+| `path` | where the tree lives **on the agent** — what its ffmpeg must open |
+| `server_path` | what the **Jellyfin server** calls the same tree. Optional; defaults to `path` (identical layout) |
+| `ok` | the agent could actually read it (see the probe timeout note below) |
+
+Placement compares the job's input paths (always server-side) against `server_path`, matching on a
+path-segment boundary: `server_path` `/Volumes/data` covers `/Volumes/data/x.mkv` but never
+`/Volumes/database/x.mkv`. Rewriting then swaps that prefix for `path`, so
+`-i file:/Volumes/data/s/e.mkv` becomes `-i file:/mnt/media/s/e.mkv`. The longest matching
+`server_path` wins when several overlap. Only the input side is mapped — output already goes to the
+ingest URL.
+
+## Hardware acceleration — `hwaccel` and `hwaccel_device`
+
+Jellyfin builds the ffmpeg command line for **the server's own** hardware (here: VideoToolbox on
+macOS). Shipping that verbatim to a Linux/VAAPI box would fail, so the plugin translates the
+hardware-specific parts of the command line for the agent that will run it.
+
+| field | meaning |
+|---|---|
+| `hwaccel` | the profile the agent wants its jobs built for: `videotoolbox`, `nvenc`, `qsv`, `vaapi`, `amf`, `rkmpp`, or `none` (software). Optional — the agent auto-detects when unset, and the server falls back to inferring from `ffmpeg.hwaccels` + `platform` |
+| `hwaccel_device` | device the profile needs, e.g. `/dev/dri/renderD128` for VAAPI/QSV on Linux. Optional |
+
+`none` is a valid, useful answer: a fast CPU with no usable GPU still helps, it just gets `libx264`.
+
+The server only ever *narrows* what it was given — it never invents filters Jellyfin did not ask for.
+When a command line uses anything the translator does not fully understand (subtitle burn-in,
+`-filter_complex`, tonemapping, an unrecognised filter), the job is **not** sent to an agent needing
+translation; it runs locally or on an agent whose profile already matches. Refusing is always
+allowed, guessing is not — every prior project that tried to blindly rewrite ffmpeg arguments
+(rffmpeg #75, jellyfin-meta #36) broke on exactly this.
+
+After translation the server re-checks that every encoder and filter it produced is present in the
+agent's reported `encoders`/`filters`, and refuses the placement if not.
+
+### Translation table (source is whatever Jellyfin generated, typically videotoolbox here)
+
+| piece | `none` | `vaapi` | `nvenc` | `qsv` |
+|---|---|---|---|---|
+| device/hwaccel init | *(removed)* | `-init_hw_device vaapi=va:<device> -hwaccel vaapi -hwaccel_output_format vaapi` | `-hwaccel cuda -hwaccel_output_format cuda` | `-init_hw_device qsv=qs:<device> -hwaccel qsv -hwaccel_output_format qsv` |
+| H.264 encoder | `libx264` | `h264_vaapi` | `h264_nvenc` | `h264_qsv` |
+| HEVC encoder | `libx265` | `hevc_vaapi` | `hevc_nvenc` | `hevc_qsv` |
+| scale filter | `scale=w=W:h=H` | `scale_vaapi=w=W:h=H` | `scale_cuda=w=W:h=H` | `scale_qsv=w=W:h=H` |
+| AudioToolbox `aac_at` | `aac` | `aac` | `aac` | `aac` |
+| VideoToolbox-only flags (`-prio_speed`) | *(removed)* | *(removed)* | *(removed)* | *(removed)* |
+
+`-codec:v copy` (remux) needs no video translation at all; only `aac_at` has to be mapped, which is
+why remuxes are portable to any agent.
