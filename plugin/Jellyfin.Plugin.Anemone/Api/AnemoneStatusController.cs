@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.Anemone.Agents;
+using Jellyfin.Plugin.Anemone.Contracts;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.AspNetCore.Authorization;
@@ -21,15 +22,20 @@ public sealed record AgentStatusEntry(
     DateTimeOffset LastSeen,
     bool Connected,
     string Hwaccel,
-    string? HwaccelDevice);
+    string? HwaccelDevice,
+    double? MeasuredSpeed,
+    double? Load,
+    string RankReason);
 
 /// <summary>One mount entry in an <see cref="AgentStatusEntry"/>.</summary>
-public sealed record MountStatusEntry(string Path, bool Ok, string ServerPath);
+public sealed record MountStatusEntry(string Path, bool Ok, string ServerPath, bool? Local);
 
 /// <summary>Response body of <c>GET Anemone/status</c>.</summary>
 public sealed record AnemoneStatusResponse(
     bool Enabled,
     bool DryRun,
+    bool PreferRemote,
+    int LocalMaxSessions,
     string IngestBase,
     string ServerFfmpeg,
     IReadOnlyList<AgentStatusEntry> Agents);
@@ -62,23 +68,45 @@ public sealed class AnemoneStatusController : ControllerBase
                 a.Info.FfmpegVersion,
                 a.Info.Hwaccels,
                 a.Info.Encoders.Count,
-                a.Info.Mounts.Select(m => new MountStatusEntry(m.Path, m.Ok, m.EffectiveServerPath)).ToList(),
+                a.Info.Mounts.Select(m => new MountStatusEntry(m.Path, m.Ok, m.EffectiveServerPath, m.Local)).ToList(),
                 a.ActiveJobs,
                 a.Info.MaxSessions,
                 a.Info.ConnectedAt,
                 a.LastSeen,
                 a.IsConnected,
                 a.Info.Hwaccel,
-                a.Info.HwaccelDevice))
+                a.Info.HwaccelDevice,
+                a.MeasuredSpeed,
+                a.Load,
+                RankReason(a)))
             .ToList();
 
         var response = new AnemoneStatusResponse(
             config?.Enabled ?? false,
             config?.DryRun ?? false,
+            config?.PreferRemote ?? true,
+            config?.LocalMaxSessions ?? 0,
             _hub.ResolveIngestBase(),
             _mediaEncoder.EncoderVersion?.ToString() ?? string.Empty,
             agents);
 
         return Ok(response);
+    }
+
+    /// <summary>
+    /// General (not-job-specific) ranking breakdown for the dashboard: locality is shown as "unknown"
+    /// since there's no particular input path to check a mount against here - see each mount's own
+    /// <c>Local</c> flag in <see cref="MountStatusEntry"/> for that. Everything else (measured throughput,
+    /// spare capacity, reported load) is the same signal <see cref="AgentHub.CandidatesFrom"/> uses for a
+    /// real placement decision, so this is a fair "why is this agent favoured right now" summary.
+    /// </summary>
+    private static string RankReason(IAgentConnection agent)
+    {
+        var spareCapacityFraction = agent.Info.MaxSessions > 0
+            ? 1.0 - ((double)agent.ActiveJobs / agent.Info.MaxSessions)
+            : 0.0;
+
+        var input = new AgentRankingInput(agent.Info.Name, Local: null, agent.MeasuredSpeed, spareCapacityFraction, agent.Load);
+        return AgentRanker.Score(input).Reason;
     }
 }
