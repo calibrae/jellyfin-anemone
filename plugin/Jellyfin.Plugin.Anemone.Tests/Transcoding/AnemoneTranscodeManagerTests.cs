@@ -43,9 +43,12 @@ public class AnemoneTranscodeManagerTests
         var started = Assert.Single(agent.StartedJobs);
         Assert.Equal(jobId, started.Spec.Id);
 
-        // anemone: no throttler for remote jobs (TranscodingThrottler dereferences job.Process!); the
-        // segment cleaner never touches Process, so it's attached exactly like a local job's.
+        // anemone: job.TranscodingThrottler is never populated any more, for either a local or a remote
+        // job - our AnemoneTranscodingThrottler fork lives in the manager's own map instead (see
+        // GetThrottleStatus and the Throttling_* tests below). This agent didn't report
+        // ffmpeg.pause_keys support (AgentInfoBuilder's default), so it gets no throttler at all either.
         Assert.Null(job.TranscodingThrottler);
+        Assert.Empty(harness.Manager.GetThrottleStatus());
         Assert.NotNull(job.TranscodingSegmentCleaner);
 
         // Clean up without waiting out the 5s kill grace period (that's its own dedicated test below).
@@ -419,5 +422,172 @@ public class AnemoneTranscodeManagerTests
         await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
         started.Job.CompleteExited(0);
         await killTask;
+    }
+
+    // --- Throttling (v2.2) ---
+    //
+    // Pure throttler decision logic (pause/resume/never-twice/EnableThrottling gate/HasExited) is covered
+    // directly, fast, against a hand-built TranscodingJob in AnemoneTranscodingThrottlerTests. These tests
+    // are about the MANAGER's own responsibilities: only building a throttler for a remote job whose agent
+    // reported ffmpeg.pause_keys, and tearing it down on every terminal path.
+
+    [Fact]
+    public async Task Throttling_NonCapableAgent_GetsNoThrottler()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness();
+        var outputPath = harness.OutputPath("throttle-incapable.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        // AgentInfoBuilder's PauseKeysSupported defaults to false, mirroring the wire's own
+        // "absent means unsupported" rule (PROTOCOL.md "Throttling (v2.2)").
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().WithName("trish").Build())
+        {
+            ExitCodeAfterStart = null,
+        };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "throttle-incapable");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+        await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+
+        Assert.Empty(harness.Manager.GetThrottleStatus());
+        Assert.True(harness.LoggerFactory.HasMessageContaining("did not report ffmpeg.pause_keys support"));
+
+        var killTask = harness.Manager.KillTranscodingJobs(state.Request.DeviceId, state.Request.PlaySessionId, _ => false);
+        var started = Assert.Single(agent.StartedJobs);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
+        started.Job.CompleteExited(0);
+        await killTask;
+    }
+
+    [Fact]
+    public async Task Throttling_CapableAgent_GetsThrottler_RemovedFromMapOnKill()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness();
+        var outputPath = harness.OutputPath("throttle-kill.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().WithName("trish").WithPauseKeysSupported().Build())
+        {
+            ExitCodeAfterStart = null,
+        };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "throttle-kill");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+        await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+
+        Assert.Contains(harness.Manager.GetThrottleStatus(), t => t.JobId == jobId && t.AgentName == "trish" && !t.Paused);
+
+        var killTask = harness.Manager.KillTranscodingJobs(state.Request.DeviceId, state.Request.PlaySessionId, _ => false);
+        var started = Assert.Single(agent.StartedJobs);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
+        started.Job.CompleteExited(0);
+        await killTask;
+
+        // Never got paused (the real timer never ticked in this test), so kill's Stop() call is a no-op
+        // resume - see Throttling_RemoteJob_PauseCapableAgent below for the paused case.
+        Assert.DoesNotContain("u", started.Job.StdinSent);
+        Assert.Empty(harness.Manager.GetThrottleStatus());
+    }
+
+    [Fact]
+    public async Task Throttling_CapableAgent_RemovedFromMapOnNormalExit()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness();
+        var outputPath = harness.OutputPath("throttle-exit.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().WithName("trish").WithPauseKeysSupported().Build())
+        {
+            ExitCodeAfterStart = null, // drive the exit ourselves, via the sink, below
+        };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "throttle-exit");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+        await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+        var started = Assert.Single(agent.StartedJobs);
+
+        Assert.Contains(harness.Manager.GetThrottleStatus(), t => t.JobId == jobId);
+
+        // The agent's own ffmpeg finished normally - same IRemoteJobSink.OnExited call a real "exit" frame
+        // drives (see AgentConnection.HandleExit).
+        started.Sink.OnExited(0, null);
+
+        await Waiting.UntilAsync(() => harness.Manager.GetThrottleStatus().Count == 0, because: "FinishRemoteJob should tear the throttler down on normal exit");
+    }
+
+    [Fact]
+    public async Task Throttling_CapableAgent_RemovedFromMapOnAgentDisconnect()
+    {
+        using var harness = new AnemoneTranscodeManagerHarness();
+        var outputPath = harness.OutputPath("throttle-disconnect.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().WithName("trish").WithPauseKeysSupported().Build())
+        {
+            ExitCodeAfterStart = null,
+        };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "throttle-disconnect");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+        await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+        var started = Assert.Single(agent.StartedJobs);
+
+        Assert.Contains(harness.Manager.GetThrottleStatus(), t => t.JobId == jobId);
+
+        // Mirrors AgentConnection.FailAllPendingJobs: the control connection dropped, code -1, no more
+        // frames will ever come for this job.
+        started.Sink.OnExited(-1, "connection lost");
+
+        await Waiting.UntilAsync(() => harness.Manager.GetThrottleStatus().Count == 0, because: "FinishRemoteJob should tear the throttler down when the agent connection is lost");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task Throttling_RemoteJob_PauseCapableAgent_KeysReachAgent_AndClearOnKill()
+    {
+        // Genuinely slow (~5s): AnemoneTranscodingThrottler's timer (forked verbatim from upstream) has a
+        // hardcoded 5000ms due-time/period with no configuration seam to shorten for tests, mirroring
+        // KillTranscodingJobs_RemoteJob_SendsQuitThenKillsAfterGracePeriod above. See
+        // AnemoneTranscodingThrottlerTests for a fast, seam-driven version of the pause/resume decision
+        // logic in isolation - this test's only job is proving the MANAGER wires a throttler up to a real
+        // remote job end to end and its keys really reach IRemoteJob.SendStdinAsync.
+        using var harness = new AnemoneTranscodeManagerHarness();
+        // EncodingOptions is a real Jellyfin model POCO (FakeServerConfigurationManager's own remarks) -
+        // set its EnableThrottling explicitly rather than relying on whatever upstream's own default is.
+        harness.ConfigManager.EncodingOptions.EnableThrottling = true;
+        var outputPath = harness.OutputPath("throttle-pause.m3u8");
+        var jobId = Guid.NewGuid().ToString("N");
+        var agent = new FakeAgentConnection(new AgentInfoBuilder().WithName("trish").WithPauseKeysSupported().Build())
+        {
+            ExitCodeAfterStart = null,
+        };
+        agent.OnStartJobCalled = (_, _) => File.WriteAllText(outputPath, string.Empty);
+        harness.Router.PlanToReturn = BuildPlan(agent, jobId, Path.GetDirectoryName(outputPath)!, "throttle-pause");
+
+        var state = harness.NewState().Build();
+        using var cts = new CancellationTokenSource();
+        var job = await harness.Manager.StartFfMpeg(state, outputPath, "-f hls -y " + outputPath, Guid.Empty, TranscodingJobType.Hls, cts);
+
+        Assert.Contains(harness.Manager.GetThrottleStatus(), t => t.JobId == jobId && t.AgentName == "trish");
+
+        // Far enough ahead of the (nonexistent, in this test) viewer that the throttler's first tick pauses.
+        job.DownloadPositionTicks = TimeSpan.FromMinutes(1).Ticks;
+        job.TranscodingPositionTicks = job.DownloadPositionTicks + TimeSpan.FromMinutes(5).Ticks;
+
+        var started = Assert.Single(agent.StartedJobs);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("p"), timeout: TimeSpan.FromSeconds(8), because: "the throttler's 5s timer should have paused by now");
+        Assert.True(harness.Manager.GetThrottleStatus().Single(t => t.JobId == jobId).Paused);
+
+        var killTask = harness.Manager.KillTranscodingJobs(state.Request.DeviceId, state.Request.PlaySessionId, _ => false);
+        await Waiting.UntilAsync(() => started.Job.StdinSent.Contains("q\n"));
+        started.Job.CompleteExited(0);
+        await killTask;
+
+        // Kill unpauses before sending "q" (see KillTranscodingJob) and removes the throttler.
+        Assert.Contains("u", started.Job.StdinSent);
+        Assert.Empty(harness.Manager.GetThrottleStatus());
     }
 }
