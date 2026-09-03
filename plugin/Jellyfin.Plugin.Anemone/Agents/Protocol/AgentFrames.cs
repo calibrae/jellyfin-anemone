@@ -3,13 +3,19 @@ namespace Jellyfin.Plugin.Anemone.Agents.Protocol;
 // Frames sent Agent -> Server. See PROTOCOL.md "## Agent -> Server".
 
 /// <summary>The ffmpeg capability block inside a <see cref="HelloFrame"/>.</summary>
+/// <param name="PauseKeys">
+/// anemone (protocol v2.2): true when THIS agent's ffmpeg honours the jellyfin-ffmpeg <c>p</c>/<c>u</c>
+/// interactive pause keys - not in upstream ffmpeg, see PROTOCOL.md "Throttling (v2.2)". Optional; absent
+/// means unknown and is treated as unsupported.
+/// </param>
 public sealed record FfmpegInfoFrame(
     string Path,
     string Version,
     IReadOnlyList<string>? Hwaccels = null,
     IReadOnlyList<string>? Encoders = null,
     IReadOnlyList<string>? Decoders = null,
-    IReadOnlyList<string>? Filters = null);
+    IReadOnlyList<string>? Filters = null,
+    bool? PauseKeys = null);
 
 /// <summary>
 /// One mount entry inside <see cref="HelloFrame"/> / <see cref="StatusFrame"/>. <paramref name="ServerPath"/>

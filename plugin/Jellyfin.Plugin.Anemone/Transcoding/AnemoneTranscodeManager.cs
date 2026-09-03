@@ -63,6 +63,14 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
     // IRemoteJob.Id). A job appears here from the moment StartJobAsync succeeds until OnExited fires.
     private readonly ConcurrentDictionary<string, IRemoteJob> _remoteJobs = new(StringComparer.Ordinal);
 
+    // anemone (v2.2 throttling): live AnemoneTranscodingThrottlers, keyed by TranscodingJob.Id - for BOTH
+    // local and remote jobs. TranscodingJob.TranscodingThrottler is typed to upstream's own class and
+    // cannot hold our fork (see AnemoneTranscodingThrottler's file-level remarks), so this map is now the
+    // only place a throttler lives. A job appears here from StartThrottler/StartRemoteThrottler until
+    // whichever of KillTranscodingJob or FinishJob tears it down first - see both for why every terminal
+    // path (kill, local ffmpeg exit, remote exit, agent disconnect) must remove it here.
+    private readonly ConcurrentDictionary<string, AnemoneTranscodingThrottler> _throttlers = new(StringComparer.Ordinal);
+
     private readonly Version _maxFFmpegCkeyPauseSupported = new Version(6, 1);
 
     /// <summary>
@@ -250,6 +258,18 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
             }
         }
 
+        // anemone (v2.2 throttling): stop + unpause our own throttler (local or remote) before anything
+        // else. Upstream's job.Stop()/TranscodingJob.Dispose() would normally do this via
+        // job.TranscodingThrottler, but our fork can't be stored there (see AnemoneTranscodingThrottler's
+        // file-level remarks) - it lives in _throttlers instead, for both local and remote jobs, and must
+        // be torn down explicitly here. TryRemove doubles as the mutex against FinishJob noticing the same
+        // job exit concurrently (same pattern _remoteJobs already uses below): whichever of the two removes
+        // the entry first is the one that stops it.
+        if (job.Id is not null && _throttlers.TryRemove(job.Id, out var throttler))
+        {
+            await throttler.Stop().ConfigureAwait(false);
+        }
+
         // anemone: a remote job has no local Process — Stop() would NRE on process!.StandardInput if the job
         // hasn't exited yet (Process is unconditionally dereferenced there). Send the same "q" quit key
         // over the control channel instead, with the same 5s-then-kill grace upstream gives a local
@@ -257,11 +277,8 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
         // deadlock risk in awaiting the socket write.
         if (job.Id is not null && _remoteJobs.TryGetValue(job.Id, out var remoteJob))
         {
-            // Stop()'s throttler/cleaner calls are unconditional (not guarded by HasExited) — mirror them
-            // here. TranscodingThrottler is always null for remote jobs today (kept for symmetry/in case
-            // a future throttler fork attaches one); TranscodingSegmentCleaner is real and must be
-            // stopped promptly rather than waiting for FinishRemoteJob's eventual job.Dispose().
-            job.TranscodingThrottler?.Stop().GetAwaiter().GetResult();
+            // Stop()'s segment-cleaner call is unconditional (not guarded by HasExited) — mirror it here so
+            // it stops promptly rather than waiting for FinishRemoteJob's eventual job.Dispose().
             job.TranscodingSegmentCleaner?.Stop();
             await StopRemoteJobAsync(remoteJob).ConfigureAwait(false);
         }
@@ -795,11 +812,10 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
 
         if (!transcodingJob.HasExited)
         {
-            // anemone: no throttler for remote jobs — TranscodingThrottler dereferences job.Process! to write
-            // the pause/resume keystroke, which is always null here. v0 skips throttling remote jobs
-            // entirely (RESEARCH.md §6); a v1 fork of TranscodingThrottler would route p/u over
-            // IRemoteJob.SendStdinAsync instead.
-            _logger.LogDebug("anemone: throttling not applied to remote job {Id}", jobId);
+            // anemone (v2.2 throttling): throttle a remote job through the control channel - see
+            // StartRemoteThrottler for the capability gate (agent's ffmpeg.pause_keys) and PROTOCOL.md
+            // "Throttling (v2.2)" for why.
+            StartRemoteThrottler(state, transcodingJob, plan.Agent.Info, remoteJob);
 
             // TranscodingSegmentCleaner only ever touches job.Path/DownloadPositionTicks/HasExited/Type —
             // never job.Process — so it's safe to reuse unchanged for remote jobs (segments land as local
@@ -880,15 +896,89 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
         FinishJob(job, state, job.ExitCode);
     }
 
+    // anemone: builds a LOCAL AnemoneTranscodingThrottler - same EnableThrottling/IsPkeyPauseSupported gate
+    // as upstream (kept verbatim: getting this policy wrong stalls playback), but the instance is stored in
+    // _throttlers (keyed by job id) instead of transcodingJob.TranscodingThrottler, because that property
+    // is typed to upstream's own class and cannot hold our fork. See KillTranscodingJob/FinishJob for the
+    // matching teardown, and StartRemoteThrottler below for the agent-side counterpart.
     private void StartThrottler(StreamState state, TranscodingJob transcodingJob)
     {
         if (EnableThrottling(state)
             && (_mediaEncoder.IsPkeyPauseSupported
                 || _mediaEncoder.EncoderVersion <= _maxFFmpegCkeyPauseSupported))
         {
-            transcodingJob.TranscodingThrottler = new TranscodingThrottler(transcodingJob, _loggerFactory.CreateLogger<TranscodingThrottler>(), _serverConfigurationManager, _fileSystem, _mediaEncoder);
-            transcodingJob.TranscodingThrottler.Start();
+            var throttler = new AnemoneTranscodingThrottler(
+                transcodingJob,
+                _loggerFactory.CreateLogger<AnemoneTranscodingThrottler>(),
+                _serverConfigurationManager,
+                _fileSystem,
+                _mediaEncoder.IsPkeyPauseSupported,
+                key => transcodingJob.Process!.StandardInput.WriteAsync(key));
+
+            if (transcodingJob.Id is not null)
+            {
+                _throttlers[transcodingJob.Id] = throttler;
+            }
+
+            throttler.Start();
         }
+    }
+
+    // anemone (v2.2 throttling): remote-job counterpart of StartThrottler. Same EnableThrottling gate as
+    // the local path (state-derived, doesn't touch Process - shared verbatim), but pause-key capability is
+    // the AGENT's, not the server's IMediaEncoder (see PROTOCOL.md "Throttling (v2.2)"): an agent that
+    // didn't report ffmpeg.pause_keys=true gets no throttler at all and its job simply runs unthrottled,
+    // exactly as every remote job did before this feature existed. Never falls back to "c" - on a
+    // jellyfin-ffmpeg build without the pause patch that key opens the filtergraph-command prompt instead
+    // of pausing, which would mislead rather than throttle.
+    private void StartRemoteThrottler(StreamState state, TranscodingJob transcodingJob, AgentInfo agentInfo, IRemoteJob remoteJob)
+    {
+        if (!EnableThrottling(state))
+        {
+            return;
+        }
+
+        if (!agentInfo.PauseKeysSupported)
+        {
+            _logger.LogDebug(
+                "anemone: agent {Agent} did not report ffmpeg.pause_keys support, throttling not applied to remote job {Id}",
+                agentInfo.Name,
+                transcodingJob.Id);
+            return;
+        }
+
+        var throttler = new AnemoneTranscodingThrottler(
+            transcodingJob,
+            _loggerFactory.CreateLogger<AnemoneTranscodingThrottler>(),
+            _serverConfigurationManager,
+            _fileSystem,
+            pkeyPauseSupported: true,
+            sendKey: key => remoteJob.SendStdinAsync(key));
+
+        if (transcodingJob.Id is not null)
+        {
+            _throttlers[transcodingJob.Id] = throttler;
+        }
+
+        throttler.Start();
+    }
+
+    /// <summary>
+    /// anemone (v2.2 throttling): snapshot of live throttling state for the status API/dashboard - which
+    /// agent (null for a local job) is running each currently-throttled job, and whether it's paused right
+    /// now. See <see cref="Api.AnemoneStatusController"/>.
+    /// </summary>
+    public IReadOnlyList<ThrottleStatus> GetThrottleStatus()
+    {
+        var result = new List<ThrottleStatus>(_throttlers.Count);
+
+        foreach (var (jobId, throttler) in _throttlers)
+        {
+            var agentName = _remoteJobs.TryGetValue(jobId, out var remoteJob) ? remoteJob.AgentName : null;
+            result.Add(new ThrottleStatus(jobId, agentName, throttler.IsPaused));
+        }
+
+        return result;
     }
 
     private static bool EnableThrottling(StreamState state)
@@ -992,6 +1082,18 @@ public sealed class AnemoneTranscodeManager : ITranscodeManager, IDisposable
     {
         job.HasExited = true;
         job.ExitCode = exitCode;
+
+        // anemone (v2.2 throttling): dispose our own throttler here too. Upstream's job.Dispose() (below)
+        // would do this via job.TranscodingThrottler for a local job, but ours never populates that
+        // property (see AnemoneTranscodingThrottler's file-level remarks) - this is the shared exit path
+        // for BOTH a local ffmpeg process exiting (OnFfMpegProcessExited) and a remote job ending
+        // (FinishRemoteJob, itself reached from a normal exit frame or an agent disconnect), so one removal
+        // here covers every "the process/job just ended on its own" terminal path. TryRemove is a no-op if
+        // KillTranscodingJob already claimed teardown (see there).
+        if (job.Id is not null && _throttlers.TryRemove(job.Id, out var throttler))
+        {
+            throttler.Dispose();
+        }
 
         ReportTranscodingProgress(job, state, null, null, null, null, null);
 

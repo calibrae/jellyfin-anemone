@@ -110,6 +110,8 @@
                                 <th class="tableColumn">Hwaccels</th>
                                 <th class="tableColumn">Hw profile</th>
                                 <th class="tableColumn">Active/Max</th>
+                                <th class="tableColumn">Paused</th>
+                                <th class="tableColumn">Pause keys</th>
                                 <th class="tableColumn">Speed</th>
                                 <th class="tableColumn">Load</th>
                                 <th class="tableColumn">Mounts (server path -&gt; agent path)</th>
@@ -118,7 +120,7 @@
                             </tr>
                         </thead>
                         <tbody id="AnemoneAgentsTableBody">
-                            <tr><td colspan="11">No agents connected.</td></tr>
+                            <tr><td colspan="13">No agents connected.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -219,7 +221,7 @@
                 var agents = pick(status, "Agents", "agents") || [];
 
                 if (!agents.length) {
-                    body.innerHTML = '<tr><td colspan="11">No agents connected.</td></tr>';
+                    body.innerHTML = '<tr><td colspan="13">No agents connected.</td></tr>';
                     return;
                 }
 
@@ -244,6 +246,8 @@
                     var nameSuffix = connected ? "" : " (disconnected)";
                     var active = pick(a, "ActiveJobs", "activeJobs");
                     var max = pick(a, "MaxSessions", "maxSessions");
+                    var paused = pick(a, "PausedJobs", "pausedJobs") || 0;
+                    var pauseKeySupport = pick(a, "PauseKeySupport", "pauseKeySupport");
                     var speed = formatSpeed(pick(a, "MeasuredSpeed", "measuredSpeed"));
                     var load = formatLoad(pick(a, "Load", "load"));
                     var reason = pick(a, "RankReason", "rankReason") || "";
@@ -255,6 +259,8 @@
                         "<td>" + escapeHtml(hwaccels) + "</td>" +
                         "<td>" + escapeHtml(hwProfileLabel) + "</td>" +
                         "<td>" + escapeHtml(active) + "/" + escapeHtml(max) + "</td>" +
+                        "<td>" + escapeHtml(paused) + "</td>" +
+                        "<td>" + (pauseKeySupport ? "yes" : "no") + "</td>" +
                         "<td>" + escapeHtml(speed) + "</td>" +
                         "<td>" + escapeHtml(load) + "</td>" +
                         "<td>" + (mounts || "&#8212;") + "</td>" +
