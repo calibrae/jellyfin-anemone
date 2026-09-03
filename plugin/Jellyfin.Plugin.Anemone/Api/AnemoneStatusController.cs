@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.Anemone.Agents;
 using Jellyfin.Plugin.Anemone.Contracts;
+using Jellyfin.Plugin.Anemone.Transcoding;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.AspNetCore.Authorization;
@@ -8,6 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace Jellyfin.Plugin.Anemone.Api;
 
 /// <summary>One agent's row in the <see cref="AnemoneStatusController"/> response.</summary>
+/// <param name="PauseKeySupport">anemone (v2.2 throttling): whether this agent reported <c>ffmpeg.pause_keys</c> - see PROTOCOL.md "Throttling (v2.2)".</param>
+/// <param name="PausedJobs">anemone (v2.2 throttling): how many of this agent's currently-throttled jobs are paused right now.</param>
 public sealed record AgentStatusEntry(
     string Name,
     string Platform,
@@ -17,12 +20,14 @@ public sealed record AgentStatusEntry(
     int Encoders,
     IReadOnlyList<MountStatusEntry> Mounts,
     int ActiveJobs,
+    int PausedJobs,
     int MaxSessions,
     DateTimeOffset ConnectedAt,
     DateTimeOffset LastSeen,
     bool Connected,
     string Hwaccel,
     string? HwaccelDevice,
+    bool PauseKeySupport,
     double? MeasuredSpeed,
     double? Load,
     string RankReason);
@@ -48,17 +53,23 @@ public sealed class AnemoneStatusController : ControllerBase
 {
     private readonly AgentHub _hub;
     private readonly IMediaEncoder _mediaEncoder;
+    private readonly AnemoneTranscodeManager _manager;
 
-    public AnemoneStatusController(AgentHub hub, IMediaEncoder mediaEncoder)
+    public AnemoneStatusController(AgentHub hub, IMediaEncoder mediaEncoder, AnemoneTranscodeManager manager)
     {
         _hub = hub;
         _mediaEncoder = mediaEncoder;
+        _manager = manager;
     }
 
     [HttpGet("status")]
     public ActionResult<AnemoneStatusResponse> GetStatus()
     {
         var config = Plugin.Instance?.Configuration;
+
+        // anemone (v2.2 throttling): one query, then aggregated per agent below - GetThrottleStatus's own
+        // remarks explain why job-level throttle state can't live on AgentHub/IAgentConnection.
+        var throttleStatus = _manager.GetThrottleStatus();
 
         var agents = _hub.Agents
             .Select(a => new AgentStatusEntry(
@@ -70,12 +81,14 @@ public sealed class AnemoneStatusController : ControllerBase
                 a.Info.Encoders.Count,
                 a.Info.Mounts.Select(m => new MountStatusEntry(m.Path, m.Ok, m.EffectiveServerPath, m.Local)).ToList(),
                 a.ActiveJobs,
+                throttleStatus.Count(t => t.Paused && string.Equals(t.AgentName, a.Info.Name, StringComparison.Ordinal)),
                 a.Info.MaxSessions,
                 a.Info.ConnectedAt,
                 a.LastSeen,
                 a.IsConnected,
                 a.Info.Hwaccel,
                 a.Info.HwaccelDevice,
+                a.Info.PauseKeysSupported,
                 a.MeasuredSpeed,
                 a.Load,
                 RankReason(a)))

@@ -25,6 +25,13 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IIngestTokenStore, IngestTokenStore>();
         serviceCollection.AddSingleton<IJobRouter, JobRouter>();
         serviceCollection.AddSingleton<ITranscodeManager, AnemoneTranscodeManager>();
+
+        // anemone (v2.2 throttling): AnemoneStatusController needs the concrete manager (GetThrottleStatus)
+        // alongside ITranscodeManager - same "concrete type resolvable too" pattern as IAgentRegistry/AgentHub
+        // above, just registered from the other direction since ITranscodeManager was already the primary
+        // registration. Resolves to the SAME singleton instance ITranscodeManager already cached.
+        serviceCollection.AddSingleton(sp => (AnemoneTranscodeManager)sp.GetRequiredService<ITranscodeManager>());
+
         serviceCollection.AddHostedService<AnemoneHostedService>();
     }
 }
