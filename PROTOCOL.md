@@ -18,7 +18,7 @@ unknown `type` values are logged and ignored.
 
 | type | fields | notes |
 |---|---|---|
-| `hello` | `name`, `version`, `platform` (`macos-arm64`, `linux-x86_64`, …), `ffmpeg: {path, version, hwaccels[], encoders[], decoders[], filters[]}`, `mounts: [{path, ok, server_path?}]`, `max_sessions`, `hwaccel?`, `hwaccel_device?` | first frame after connect; server answers `welcome` or `reject` and closes |
+| `hello` | `name`, `version`, `platform` (`macos-arm64`, `linux-x86_64`, …), `ffmpeg: {path, version, hwaccels[], encoders[], decoders[], filters[], pause_keys?}`, `mounts: [{path, ok, server_path?}]`, `max_sessions`, `hwaccel?`, `hwaccel_device?` | first frame after connect; server answers `welcome` or `reject` and closes |
 | `status` | `active` (int), `load` (0..1, optional), `mounts` (optional refresh, same shape as in `hello`) | sent on change and at least every 10 s (doubles as heartbeat) |
 | `started` | `id`, `pid` | ffmpeg spawned |
 | `stderr` | `id`, `line` | one frame per stderr line, verbatim, no trailing newline; ffmpeg progress lines (`frame=… time=…`) included — the server feeds them to Jellyfin's log/progress parser |
@@ -193,3 +193,32 @@ keeps a per-agent rolling average from them. That number is self-calibrating and
 an agent that is fast at *this* library's files, on *this* hardware, with *this* link, earns its ranking
 by the work it actually did. An agent that has not run a job yet has no measurement and is ranked on its
 free capacity alone.
+
+
+## Throttling (v2.2, 2026-09-03)
+
+Jellyfin throttles a transcode that races too far ahead of the viewer by writing a single key to
+ffmpeg's **stdin**: `p` to pause, `u` to resume. The server already forwards stdin to the agent
+(`stdin` frames), so remote throttling needs no new frame — only a way to know whether the agent's
+ffmpeg will honour those keys.
+
+| field | frame | meaning |
+|---|---|---|
+| `ffmpeg.pause_keys` | `hello` | `true` when the agent's ffmpeg supports the `p`/`u` interactive pause keys. Optional; absent means unknown, treated as unsupported |
+
+Those keys are **not** in upstream ffmpeg: they come from jellyfin-ffmpeg's
+`0028-add-pause-support-for-ffmpeg-cli.patch`. Jellyfin detects them by running ffmpeg against a null
+source, writing `?` to its stdin, and looking for `p      pause transcoding` in the help it prints;
+the agent probes its own binary the same way and reports the answer. It must be the *agent's* answer,
+not the server's — the two run different ffmpeg builds on different platforms, and the server's own
+capability says nothing about the machine that will actually run the job.
+
+An agent that reports no pause-key support still gets work; its jobs simply run unthrottled, exactly
+as they do today. Upstream's fallback of sending `c` is deliberately not used remotely: on a build
+without the patch `c` opens ffmpeg's "send a filtergraph command" prompt instead of pausing anything,
+so it would mislead rather than throttle.
+
+Why this matters: without throttling an agent encodes at whatever speed its hardware allows — measured
+here at ~25x realtime — so a viewer watching a 4 Mbit/s stream generates around 100 Mbit/s of segment
+traffic and the agent burns GPU on an episode that may be abandoned after two minutes. Throttling
+bounds both to roughly what is actually being watched.
