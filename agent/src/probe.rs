@@ -3,7 +3,10 @@
 //! ffmpeg list formats these parsers target (`-encoders`/`-decoders` share one flags-column
 //! format with `-filters`; `-hwaccels` is a bare name-per-line list).
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::protocol::{FfmpegCaps, MountStatus};
 
@@ -18,6 +21,10 @@ pub async fn probe_ffmpeg(ffmpeg_path: &str) -> Result<FfmpegCaps> {
     let version = parse_version(&version_out)
         .with_context(|| format!("could not parse `ffmpeg -version` output from {ffmpeg_path}"))?;
 
+    // Capability probe, not a precondition: never lets a broken/absent pause-key check fail
+    // startup, unlike the parses above.
+    let pause_keys = probe_pause_keys(ffmpeg_path, &version).await;
+
     Ok(FfmpegCaps {
         path: ffmpeg_path.to_string(),
         version,
@@ -25,6 +32,7 @@ pub async fn probe_ffmpeg(ffmpeg_path: &str) -> Result<FfmpegCaps> {
         encoders: parse_flagged_list(&encoders_out, "Encoders:"),
         decoders: parse_flagged_list(&decoders_out, "Decoders:"),
         filters: parse_flagged_list(&filters_out, "Filters:"),
+        pause_keys,
     })
 }
 
@@ -111,6 +119,157 @@ pub fn parse_flagged_list(text: &str, header: &str) -> Vec<String> {
         out.push(name.to_string());
     }
     out
+}
+
+/// Literal string ffmpeg prints in its interactive-key help block (`?` pressed on stdin) when the
+/// jellyfin-ffmpeg patch (`0028-add-pause-support-for-ffmpeg-cli.patch`) is present, adding the
+/// `p`/`u` pause/resume keys `TranscodingThrottler` uses. Matched verbatim against what Jellyfin
+/// itself looks for -- `MediaEncoder.cs:236`:
+/// `validator.CheckSupportedRuntimeKey("p      pause transcoding", _ffmpegVersion)` -- so this
+/// probe predicts Jellyfin's own throttling behaviour rather than inventing separate detection
+/// logic.
+const PAUSE_KEY_MARKER: &str = "p      pause transcoding";
+
+/// How long the pause-key probe may run before it's killed. The synthetic clip below is finite,
+/// so both jellyfin-ffmpeg (encoding it in well under 2s, measured) and stock ffmpeg (which never
+/// prints the marker and just runs to completion, similarly fast) normally finish on their own
+/// long before this; it exists purely so a wedged or unusually slow ffmpeg build can never block
+/// agent startup. This is a capability probe, not a precondition -- on timeout we kill the process
+/// and report `false`, we never fail startup over it.
+const PAUSE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Probe whether `ffmpeg_path` honours the `p`/`u` interactive pause/resume keys, the way
+/// Jellyfin's own `EncoderValidator.CheckSupportedRuntimeKey` does: run ffmpeg against a null
+/// source, write a literal `?` to its stdin to request the interactive-key help, and look for
+/// [`PAUSE_KEY_MARKER`] on stderr. Any failure -- binary missing, spawn error, timeout, no marker,
+/// `?` not accepted -- resolves to `false`, never an error.
+///
+/// `ffmpeg_version` picks the synthetic clip's duration exactly as Jellyfin does: ffmpeg 7's
+/// scheduler-based CLI polls stdin for interactive keys far less often than pre-7 ffmpeg, so a
+/// short clip (encoded far faster than realtime, like everything here) can finish before ffmpeg
+/// ever notices the queued `?`. Jellyfin compensates with a 10x longer synthetic clip from ffmpeg
+/// version 7.0 onward (`_minFFmpegMultiThreadedCli`); measured live on this box, `d=1000` never
+/// triggers the marker on jellyfin-ffmpeg 7.1.2 even though it supports pause keys, while
+/// `d=10000` reliably does (~1-2s wall clock). Getting this wrong silently mispredicts Jellyfin's
+/// own throttling, so duration matches Jellyfin's version-conditional choice rather than the flat
+/// value that might look like the obvious reading of the probe.
+async fn probe_pause_keys(ffmpeg_path: &str, ffmpeg_version: &str) -> bool {
+    let duration = pause_probe_duration_secs(ffmpeg_version);
+    let nullsrc = format!("nullsrc=s=1x1:d={duration}");
+    let args = [
+        "-hide_banner",
+        "-f",
+        "lavfi",
+        "-i",
+        &nullsrc,
+        "-f",
+        "null",
+        "-",
+    ];
+
+    let mut child = match tokio::process::Command::new(ffmpeg_path)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let found = tokio::time::timeout(PAUSE_PROBE_TIMEOUT, drive_pause_probe(&mut child))
+        .await
+        .unwrap_or(false);
+
+    // The synthetic clip is finite, so the process has usually already exited by the time we get
+    // here (whether or not we found the marker); if it hasn't -- timeout, or a build that hangs
+    // for some unrelated reason -- this forcibly reaps it. `Child::kill` sends the signal and
+    // awaits the reap without blocking the runtime thread.
+    let _ = child.kill().await;
+
+    found
+}
+
+/// Pick the synthetic clip's duration in (nominal) seconds, mirroring `EncoderValidator`'s
+/// `ffmpegVersion >= _minFFmpegMultiThreadedCli(7,0) ? 10000 : 1000`. An unparseable version
+/// (like a C# `null`) falls back to the pre-7 value, same as Jellyfin's own nullable comparison
+/// (`null >= new Version(7, 0)` is `false` in C#).
+fn pause_probe_duration_secs(ffmpeg_version: &str) -> u32 {
+    match parse_major_version(ffmpeg_version) {
+        Some(major) if major >= 7 => 10_000,
+        _ => 1_000,
+    }
+}
+
+/// Pull the leading major version number out of a string like `"7.1.2-Jellyfin"` or `"8.0.1"`.
+fn parse_major_version(version: &str) -> Option<u32> {
+    let numeric: String = version
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    numeric.split('.').next()?.parse().ok()
+}
+
+/// Write `?` to ffmpeg's stdin, then read stderr and stdout concurrently (draining stdout so it
+/// can never fill up and block the child, even though we don't look at it) until [`PAUSE_KEY_MARKER`]
+/// appears on stderr or both streams close. Mirrors Jellyfin's own `EncoderValidator.GetProcessOutput`,
+/// which writes the test key immediately after `Process.Start()` and drains stdout+stderr
+/// concurrently for the same reason (jellyfin/jellyfin#17429) -- we just stop as soon as the
+/// marker shows up instead of waiting for the process to run to completion.
+async fn drive_pause_probe(child: &mut tokio::process::Child) -> bool {
+    let (Some(mut stdin), Some(mut stderr), Some(mut stdout)) =
+        (child.stdin.take(), child.stderr.take(), child.stdout.take())
+    else {
+        return false;
+    };
+
+    if stdin.write_all(b"?").await.is_err() {
+        return false;
+    }
+    let _ = stdin.flush().await;
+    drop(stdin); // nothing else to send; don't hold the pipe open
+
+    let mut acc = String::new();
+    let mut stderr_buf = [0u8; 4096];
+    let mut stdout_buf = [0u8; 4096];
+    let mut stderr_eof = false;
+    let mut stdout_eof = false;
+
+    loop {
+        if stderr_eof && stdout_eof {
+            return false;
+        }
+        tokio::select! {
+            n = stderr.read(&mut stderr_buf), if !stderr_eof => {
+                match n {
+                    Ok(0) => stderr_eof = true,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&stderr_buf[..n]));
+                        if detect_pause_keys(&acc) {
+                            return true;
+                        }
+                    }
+                    Err(_) => stderr_eof = true,
+                }
+            }
+            n = stdout.read(&mut stdout_buf), if !stdout_eof => {
+                match n {
+                    Ok(0) | Err(_) => stdout_eof = true,
+                    Ok(_) => {} // discarded -- only drained so it can't block the child
+                }
+            }
+        }
+    }
+}
+
+/// Pure decision function: does this captured ffmpeg output show `p`/`u` pause-key support?
+/// Exact substring match (ffmpeg's own output is ASCII here), mirroring `EncoderValidator`'s
+/// `StringComparison.Ordinal`. Kept separate from the process-driving code above so it's testable
+/// against captured fixtures without spawning anything.
+pub fn detect_pause_keys(text: &str) -> bool {
+    text.contains(PAUSE_KEY_MARKER)
 }
 
 /// Build this agent's platform string: `macos-arm64`, `macos-x86_64`, `linux-x86_64`,
@@ -409,5 +568,121 @@ mod tests {
         assert!(!caps.encoders.is_empty());
         assert!(!caps.decoders.is_empty());
         assert!(!caps.filters.is_empty());
+    }
+
+    // --- pause-key detection: pure parser ---
+
+    #[test]
+    fn detects_pause_keys_in_jellyfin_ffmpeg_help() {
+        let text = fixture!("ffmpeg-pause-keys-jellyfin.txt");
+        assert!(detect_pause_keys(text));
+    }
+
+    #[test]
+    fn no_pause_keys_in_stock_ffmpeg_help() {
+        let text = fixture!("ffmpeg-pause-keys-homebrew.txt");
+        assert!(!detect_pause_keys(text));
+    }
+
+    #[test]
+    fn no_pause_keys_in_empty_output() {
+        assert!(!detect_pause_keys(""));
+    }
+
+    #[test]
+    fn no_pause_keys_on_near_miss_text() {
+        // "pause" and "p" both present, but not the exact marker -- must not false-positive on a
+        // loose substring match.
+        assert!(!detect_pause_keys("p  pause\nu  unpause transcoding\n"));
+    }
+
+    // --- pause-key detection: duration selection (mirrors EncoderValidator's version gate) ---
+
+    #[test]
+    fn parses_major_version_from_jellyfin_suffix() {
+        assert_eq!(parse_major_version("7.1.2-Jellyfin"), Some(7));
+    }
+
+    #[test]
+    fn parses_major_version_from_plain_version() {
+        assert_eq!(parse_major_version("8.0.1"), Some(8));
+    }
+
+    #[test]
+    fn parses_major_version_rejects_garbage() {
+        assert_eq!(parse_major_version(""), None);
+        assert_eq!(parse_major_version("unknown"), None);
+    }
+
+    #[test]
+    fn probe_duration_is_short_below_multithreaded_cli_version() {
+        assert_eq!(pause_probe_duration_secs("6.1.1"), 1_000);
+        assert_eq!(pause_probe_duration_secs("4.4.0"), 1_000);
+    }
+
+    #[test]
+    fn probe_duration_is_long_at_and_above_multithreaded_cli_version() {
+        assert_eq!(pause_probe_duration_secs("7.0.0"), 10_000);
+        assert_eq!(pause_probe_duration_secs("7.1.2-Jellyfin"), 10_000);
+        assert_eq!(pause_probe_duration_secs("8.0.1"), 10_000);
+    }
+
+    #[test]
+    fn probe_duration_falls_back_to_short_on_unparseable_version() {
+        // Mirrors C#'s `null >= new Version(7, 0)` being `false`: an unknown version takes the
+        // conservative (pre-7) branch, same as Jellyfin's own nullable comparison would.
+        assert_eq!(pause_probe_duration_secs("unknown"), 1_000);
+        assert_eq!(pause_probe_duration_secs(""), 1_000);
+    }
+
+    // --- pause-key detection: the real async probe ---
+
+    #[tokio::test]
+    async fn probe_pause_keys_false_for_nonexistent_binary_and_fast() {
+        let started = std::time::Instant::now();
+        let found = probe_pause_keys("/nonexistent/definitely/not/ffmpeg", "7.1.2-Jellyfin").await;
+        assert!(!found);
+        // A missing binary fails at spawn(), long before the probe timeout -- this must not
+        // silently degrade into waiting out the full timeout.
+        assert!(
+            started.elapsed() < PAUSE_PROBE_TIMEOUT,
+            "probe against a missing binary took {:?}, expected a near-instant spawn failure",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_pause_keys_end_to_end_if_available() {
+        // Real validation: run the actual probe against both real builds on this machine, if
+        // present. jellyfin-ffmpeg carries the pause-key patch; stock Homebrew ffmpeg doesn't.
+        let cases: [(&str, bool); 2] = [
+            ("/Applications/Jellyfin.app/Contents/MacOS/ffmpeg", true),
+            ("/opt/homebrew/bin/ffmpeg", false),
+        ];
+        let mut ran_any = false;
+        for (path, expected) in cases {
+            if !std::path::Path::new(path).exists() {
+                continue;
+            }
+            ran_any = true;
+            let started = std::time::Instant::now();
+            let version_out = run_capture(path, &["-version"])
+                .await
+                .expect("ffmpeg -version");
+            let version = parse_version(&version_out).expect("parses ffmpeg version");
+            let found = probe_pause_keys(path, &version).await;
+            assert_eq!(
+                found, expected,
+                "pause_keys mismatch for {path} (version {version})"
+            );
+            assert!(
+                started.elapsed() < PAUSE_PROBE_TIMEOUT,
+                "probe against {path} took {:?}, expected well under the timeout",
+                started.elapsed()
+            );
+        }
+        if !ran_any {
+            eprintln!("skipping: neither known local ffmpeg build was found");
+        }
     }
 }
