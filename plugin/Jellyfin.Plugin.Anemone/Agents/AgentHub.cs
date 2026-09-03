@@ -107,7 +107,8 @@ public sealed class AgentHub : IAgentRegistry
             hello.MaxSessions,
             DateTimeOffset.UtcNow,
             hwaccel,
-            hello.HwaccelDevice);
+            hello.HwaccelDevice,
+            hello.Ffmpeg.PauseKeys ?? false);
 
         if (_agents.TryRemove(hello.Name, out var existing))
         {

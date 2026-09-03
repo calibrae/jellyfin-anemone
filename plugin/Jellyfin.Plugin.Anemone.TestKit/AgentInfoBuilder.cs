@@ -20,6 +20,7 @@ public sealed class AgentInfoBuilder
     private DateTimeOffset _connectedAt = DateTimeOffset.UtcNow;
     private string _hwaccel = "videotoolbox";
     private string? _hwaccelDevice;
+    private bool _pauseKeysSupported;
 
     public AgentInfoBuilder WithName(string name)
     {
@@ -98,6 +99,13 @@ public sealed class AgentInfoBuilder
         return this;
     }
 
+    /// <summary>anemone (v2.2 throttling): whether this agent reports <c>ffmpeg.pause_keys</c> support - see PROTOCOL.md "Throttling (v2.2)". Defaults to false, matching the wire's "absent means unsupported" rule.</summary>
+    public AgentInfoBuilder WithPauseKeysSupported(bool pauseKeysSupported = true)
+    {
+        _pauseKeysSupported = pauseKeysSupported;
+        return this;
+    }
+
     public AgentInfo Build() => new(
         _name,
         _version,
@@ -112,7 +120,8 @@ public sealed class AgentInfoBuilder
         _maxSessions,
         _connectedAt,
         _hwaccel,
-        _hwaccelDevice);
+        _hwaccelDevice,
+        _pauseKeysSupported);
 }
 
 /// <summary>
@@ -135,6 +144,7 @@ public sealed class HelloFrameBuilder
     private int _maxSessions = 3;
     private string? _hwaccel;
     private string? _hwaccelDevice;
+    private bool? _pauseKeys;
 
     public HelloFrameBuilder WithName(string name)
     {
@@ -193,11 +203,18 @@ public sealed class HelloFrameBuilder
         return this;
     }
 
+    /// <summary>anemone (v2.2 throttling): sets <c>ffmpeg.pause_keys</c> on the built frame - null (the default) omits the field entirely, exercising the "absent means unsupported" wire rule.</summary>
+    public HelloFrameBuilder WithPauseKeys(bool? pauseKeys)
+    {
+        _pauseKeys = pauseKeys;
+        return this;
+    }
+
     public HelloFrame Build() => new(
         _name,
         _version,
         _platform,
-        new FfmpegInfoFrame(_ffmpegPath, _ffmpegVersion, _hwaccels, _encoders, _decoders, _filters),
+        new FfmpegInfoFrame(_ffmpegPath, _ffmpegVersion, _hwaccels, _encoders, _decoders, _filters, _pauseKeys),
         _mounts,
         _maxSessions,
         _hwaccel,

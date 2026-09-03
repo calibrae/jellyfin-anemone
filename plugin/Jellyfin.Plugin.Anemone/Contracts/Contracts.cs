@@ -4,6 +4,12 @@ using MediaBrowser.Controller.Streaming;
 namespace Jellyfin.Plugin.Anemone.Contracts;
 
 /// <summary>What an agent announced in its <c>hello</c> frame (see PROTOCOL.md).</summary>
+/// <param name="PauseKeysSupported">
+/// anemone (protocol v2.2): true when this agent's own ffmpeg supports the <c>p</c>/<c>u</c> pause keys
+/// (<c>hello.ffmpeg.pause_keys</c>) - the AGENT's capability, never the server's <c>IMediaEncoder</c>, see
+/// PROTOCOL.md "Throttling (v2.2)". Collapses the wire's "absent = unknown" into <c>false</c>, matching the
+/// protocol's own "treated as unsupported" rule, since nothing downstream needs a third state.
+/// </param>
 public sealed record AgentInfo(
     string Name,
     string Version,
@@ -18,7 +24,8 @@ public sealed record AgentInfo(
     int MaxSessions,
     DateTimeOffset ConnectedAt,
     string Hwaccel = "none",
-    string? HwaccelDevice = null);
+    string? HwaccelDevice = null,
+    bool PauseKeysSupported = false);
 
 /// <summary>
 /// One of an agent's mount points. <paramref name="ServerPath"/> is what the Jellyfin server calls the
@@ -149,6 +156,15 @@ public sealed record RoutePlan(
     string TargetDirectory,
     string FilePrefix,
     string Reason);
+
+/// <summary>
+/// anemone (v2.2 throttling): snapshot of one currently-throttled job for the status API/dashboard - see
+/// <see cref="Transcoding.AnemoneTranscodeManager.GetThrottleStatus"/>.
+/// </summary>
+/// <param name="JobId">The <see cref="MediaBrowser.Controller.MediaEncoding.TranscodingJob.Id"/> this throttler was built for.</param>
+/// <param name="AgentName">The agent running this job, or null for a local job.</param>
+/// <param name="Paused">Whether the throttler currently believes ffmpeg is paused.</param>
+public sealed record ThrottleStatus(string JobId, string? AgentName, bool Paused);
 
 /// <summary>Decides local vs remote and rewrites the command line. Pure except for token issuance.</summary>
 public interface IJobRouter
