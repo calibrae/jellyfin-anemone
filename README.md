@@ -1,7 +1,17 @@
-# jellyfin-anemone
+<p align="center">
+  <img src="docs/img/hero.jpg" alt="Anemone: a Jellyfin server offloading transcodes to agent machines" width="100%">
+</p>
 
-[![agent CI](https://github.com/calibrae/jellyfin-anemone/actions/workflows/ci.yml/badge.svg)](https://github.com/calibrae/jellyfin-anemone/actions/workflows/ci.yml)
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
+<h1 align="center">
+  <img src="docs/img/icon.png" alt="" width="28" align="absmiddle"> jellyfin-anemone
+</h1>
+
+<p align="center">
+  <a href="https://github.com/calibrae/jellyfin-anemone/actions/workflows/ci.yml"><img src="https://github.com/calibrae/jellyfin-anemone/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg" alt="License: GPL-2.0-or-later"></a>
+  <a href="https://github.com/calibrae/jellyfin-anemone/releases/latest"><img src="https://img.shields.io/github/v/release/calibrae/jellyfin-anemone?color=blueviolet" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/Jellyfin-10.11.x-00a4dc" alt="Jellyfin 10.11.x">
+</p>
 
 Distributed live transcoding for Jellyfin **without shared storage**. A Jellyfin plugin ("Anemone") replaces
 the transcode manager and ships live ffmpeg jobs to `polyp` agent daemons on other machines; ffmpeg on the
@@ -102,17 +112,57 @@ Design points worth knowing before reading code (all covered at length in [`PROT
 
 ## Install
 
-Add this repository in Jellyfin (Dashboard → Plugins → Repositories → **+**):
+### From the plugin catalogue (recommended)
 
+In Jellyfin: **Dashboard → Plugins → Repositories → +**, and add
+
+| field | value |
+|---|---|
+| Repository Name | `Anemone` |
+| Repository URL | `https://raw.githubusercontent.com/calibrae/jellyfin-anemone/main/manifest.json` |
+
+Then **Catalogue → General → Anemone → Install**, and restart Jellyfin. Set a **Shared secret** on the
+plugin's settings page — agents cannot connect until you do — and leave **Ingest base URL** empty so each
+agent is answered on the interface it actually reached the server from.
+
+Then put an agent on another machine:
+
+```sh
+# on the agent host: jellyfin-ffmpeg matching your server's 7.1.x line
+sudo mkdir -p /opt/anemone && cd /tmp
+curl -sLO https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v7.1.4-3/jellyfin-ffmpeg_7.1.4-3_portable_linux64-gpl.tar.xz
+sudo tar xf jellyfin-ffmpeg_*_portable_linux64-gpl.tar.xz -C /opt/anemone
+
+# build and install polyp (Rust stable + a C toolchain)
+git clone https://github.com/calibrae/jellyfin-anemone && cd jellyfin-anemone/agent
+cargo build --release && sudo ./install-linux.sh
+sudo $EDITOR /etc/polyp.toml     # server_url, secret, ffmpeg path, mounts
+sudo systemctl enable --now polyp
 ```
-https://raw.githubusercontent.com/calibrae/jellyfin-anemone/main/manifest.json
-```
 
-then install **Anemone** from the catalogue and restart Jellyfin. Requires Jellyfin 10.11.x — the plugin is
-built against a specific Jellyfin version and will refuse to load on a different one.
+macOS agents use `./install.sh` and the launchd plist instead; see
+[`docs/DEPLOY.md`](docs/DEPLOY.md), which also covers the two traps that cost the most time
+(a service user needs the `render` group for VAAPI, and macOS blocks local-network access for
+launchd-started binaries until you approve it).
 
-To install by hand instead, unzip the release asset into `plugins/Anemone_<version>/` inside your Jellyfin
-data directory, so that `Jellyfin.Plugin.Anemone.dll` and `meta.json` sit directly in that folder.
+The agent appears on the plugin's settings page once it connects. If it doesn't, the reason is in the
+Jellyfin log — every line the plugin writes is prefixed `anemone:`.
+
+### Requirements
+
+- Jellyfin **10.11.x**. The plugin is compiled against a specific Jellyfin version and will refuse to
+  load on a different major/minor — install the release whose `targetAbi` matches your server.
+- Each agent needs **jellyfin-ffmpeg** (not stock ffmpeg): throttling relies on pause keys that only
+  exist in Jellyfin's build, and the agent reports whether its binary has them.
+- Each agent needs the media readable at some path of its own — a mount, or local disk. Paths do not
+  have to match the server's; map them in `polyp.toml`.
+- A trusted network. See [`SECURITY.md`](SECURITY.md) before exposing anything.
+
+### By hand
+
+Download the release asset and unzip it into `plugins/Anemone_<version>/` in your Jellyfin data
+directory, so `Jellyfin.Plugin.Anemone.dll` and `meta.json` sit directly in that folder. Note that
+Jellyfin's own **Restart** button does not reload a plugin — quit and relaunch the server process.
 
 ## Quick start
 
