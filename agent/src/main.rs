@@ -35,8 +35,18 @@ async fn main() -> Result<()> {
         n_encoders = caps.encoders.len(),
         n_decoders = caps.decoders.len(),
         n_filters = caps.filters.len(),
+        pause_keys = caps.pause_keys,
         "ffmpeg probe complete"
     );
+    if caps.pause_keys {
+        info!("ffmpeg supports p/u pause-key throttling (jellyfin-ffmpeg patch present)");
+    } else {
+        warn!(
+            "ffmpeg does NOT support p/u pause-key throttling -- Jellyfin's stdin throttle \
+             falls back to sending 'c', a no-op on stock ffmpeg, so transcodes on this agent \
+             will not actually be throttled"
+        );
+    }
 
     let mounts: Vec<_> = cfg
         .mounts

@@ -1,0 +1,25 @@
+Input #0, lavfi, from 'nullsrc=s=1x1:d=10000':
+  Duration: N/A, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: wrapped_avframe, yuv420p, 1x1 [SAR 1:1 DAR 1:1], 25 fps, 25 tbr, 25 tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> wrapped_avframe (native))
+Press [q] to stop, [?] for help
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Stream #0:0: Video: wrapped_avframe, yuv420p(progressive), 1x1 [SAR 1:1 DAR 1:1], q=2-31, 200 kb/s, 25 fps, 25 tbn
+      Metadata:
+        encoder         : Lavc61.19.101 wrapped_avframe
+key    function
+?      show this help
++      increase verbosity
+-      decrease verbosity
+c      Send command to first matching filter supporting it
+C      Send/Queue command to all matching filters
+h      dump packets/hex press to cycle through the 3 states
+p      pause transcoding
+q      quit
+u      unpause transcoding
+s      Show QP histogram
+frame=72593 fps=0.0 q=-0.0 size=N/A time=00:48:23.68 bitrate=N/A speed=5.69e+03x    frame=144802 fps=141960 q=-0.0 size=N/A time=01:36:32.08 bitrate=N/A speed=5.68e+03x    frame=218435 fps=143178 q=-0.0 size=N/A time=02:25:37.40 bitrate=N/A speed=5.73e+03x    [out#0/null @ 0xa97008900] video:107422KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=250000 fps=143322 q=-0.0 Lsize=N/A time=02:46:40.00 bitrate=N/A speed=5.73e+03x

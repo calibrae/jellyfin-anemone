@@ -98,6 +98,16 @@ pub struct FfmpegCaps {
     pub encoders: Vec<String>,
     pub decoders: Vec<String>,
     pub filters: Vec<String>,
+    /// Whether this ffmpeg honours the `p`/`u` interactive pause/resume keys Jellyfin's
+    /// `TranscodingThrottler` uses to throttle a running transcode (protocol v2.2, see
+    /// `PROTOCOL.md` "Throttling"). A jellyfin-ffmpeg patch (`0028-add-pause-support-for-ffmpeg-cli.patch`),
+    /// absent from upstream ffmpeg, so it's probed rather than assumed -- see
+    /// [`crate::probe::probe_ffmpeg`]. Unlike `hwaccel`/`server_path` above there's no genuine
+    /// "unknown" state here: the agent always knows the answer once it has probed. `#[serde(default)]`
+    /// exists purely so a `hello` frame from before this field existed still deserializes, defaulting
+    /// to `false` -- the same "assume unsupported" conclusion a failed probe would reach.
+    #[serde(default)]
+    pub pause_keys: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -289,6 +299,7 @@ mod tests {
                 encoders: vec!["h264_videotoolbox".into(), "libx264".into()],
                 decoders: vec!["h264".into(), "hevc".into()],
                 filters: vec!["scale_vt".into(), "scale".into(), "overlay".into()],
+                pause_keys: true,
             },
             hwaccel: None,
             hwaccel_device: None,
@@ -306,6 +317,9 @@ mod tests {
         // "hwaccel_device" keys (both None here) must not.
         assert!(!json.contains("\"hwaccel\":"));
         assert!(!json.contains("\"hwaccel_device\":"));
+        // pause_keys is always emitted (never Option-omitted): the agent always knows the answer
+        // once it has probed.
+        assert!(json.contains("\"pause_keys\":true"));
         let back: AgentMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, back);
     }
@@ -323,6 +337,7 @@ mod tests {
                 encoders: vec!["h264_vaapi".into(), "libx264".into()],
                 decoders: vec!["h264".into(), "hevc".into()],
                 filters: vec!["scale_vaapi".into(), "scale".into()],
+                pause_keys: false,
             },
             hwaccel: Some(HwAccel::Vaapi),
             hwaccel_device: Some("/dev/dri/renderD128".into()),
@@ -338,6 +353,8 @@ mod tests {
         assert!(json.contains("\"hwaccel\":\"vaapi\""));
         assert!(json.contains("\"hwaccel_device\":\"/dev/dri/renderD128\""));
         assert!(json.contains("\"server_path\":\"/Volumes/data\""));
+        // `false` must be emitted, not dropped like an Option's None would be.
+        assert!(json.contains("\"pause_keys\":false"));
         assert!(json.contains("\"local\":true"));
         let back: AgentMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, back);
@@ -357,13 +374,33 @@ mod tests {
                 hwaccel,
                 hwaccel_device,
                 mounts,
+                ffmpeg,
                 ..
             } => {
                 assert_eq!(hwaccel, None);
                 assert_eq!(hwaccel_device, None);
                 assert_eq!(mounts[0].server_path, None);
                 assert_eq!(mounts[0].local, None);
+                // protocol v2.2: a hello predating `pause_keys` still parses, defaulting to false.
+                assert!(!ffmpeg.pause_keys);
             }
+            other => panic!("expected Hello, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hello_without_pause_keys_still_parses() {
+        // Same backward-compatibility guarantee, isolated to just the new v2.2 field: a `hello`
+        // whose `ffmpeg` object is otherwise fully v2-shaped (has hwaccel/server_path/local) but
+        // predates `pause_keys` must still deserialize, defaulting to false.
+        let text = r#"{"type":"hello","name":"trish","version":"0.1.0","platform":"macos-arm64",
+            "ffmpeg":{"path":"/opt/anemone/ffmpeg","version":"7.1.2-Jellyfin","hwaccels":["videotoolbox"],
+                      "encoders":["h264_videotoolbox"],"decoders":["h264"],"filters":["scale_vt"]},
+            "hwaccel":"videotoolbox","mounts":[{"path":"/Volumes/data","ok":true,"local":true}],"max_sessions":3}"#;
+        let msg: AgentMessage =
+            serde_json::from_str(text).expect("hello without pause_keys should still parse");
+        match msg {
+            AgentMessage::Hello { ffmpeg, .. } => assert!(!ffmpeg.pause_keys),
             other => panic!("expected Hello, got {other:?}"),
         }
     }
