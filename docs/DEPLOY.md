@@ -48,7 +48,7 @@ Dashboard → Plugins → Anemone: trish shows up in the agents table (hwaccels:
 5. `pkill polyp` on trish mid-stream → speedwagon marks the job exited; next segment request restarts locally.
 
 ## Known gaps in v0 (by design)
-Throttling off for remote jobs; subtitle burn-in, external subs, progressive, live TV, probing/trickplay stay
+Subtitle burn-in, external subs, progressive, live TV, probing/trickplay stay
 local; HTTP input fallback not wired (an agent needs the media on a mount of its own). Heterogeneous agents
 are supported — see the abbacchio section below for a Linux/VAAPI agent whose media path differs from the
 server's.
@@ -226,3 +226,34 @@ sudo systemctl daemon-reload && sudo systemctl enable --now polyp
 
 Verified: transcodes run with `ffmpeg` owned by `polyp`, the service survives `systemctl restart` and
 reconnects on its own, and it is enabled for boot.
+
+
+## Throttling remote jobs (measured 2026-09-03)
+
+Without throttling an agent encodes at whatever speed its hardware allows and races to the end of the
+episode. Measured on abbacchio: a viewer of a 4 Mbit/s stream generated **107 Mbit/s** of segment traffic,
+a ~25x overshoot, and the GPU kept working on an episode nobody was necessarily still watching.
+
+Jellyfin already solves this for local jobs by writing `p`/`u` to ffmpeg's stdin once the transcode is
+more than `ThrottleDelaySeconds` ahead of the viewer. The plugin now does the same for remote jobs by
+sending those keys over the control channel, gated on the agent's own `ffmpeg.pause_keys` capability.
+
+Note `EnableThrottling` is **off** in a default Jellyfin install — it was off on this server until now, so
+local transcodes never throttled either. Turn it on in Dashboard → Playback → Transcoding.
+
+Full cycle, live, with `ThrottleDelaySeconds = 180`:
+
+| phase | ingest |
+|---|---|
+| job starts, racing ahead | 107 Mbit/s |
+| approaching the 180s lead | 27 Mbit/s |
+| paused (180s ahead) | **0 Mbit/s** |
+| viewer catches up to ~15s behind the head | **78 Mbit/s — resumed** |
+| stop while paused | job torn down, ffmpeg gone, counters back to zero |
+
+### Testing this by hand
+
+Jellyfin derives the viewer's position from the **`runtimeTicks` query parameter the client sends**, not
+from the segment number (`DynamicHlsController.GetSegmentResult`). A synthetic viewer that requests
+segment N while still claiming `runtimeTicks=0` will never resume, and the throttler is right to keep it
+paused. Send `runtimeTicks = N * segmentSeconds * 10^7` to imitate a real client.
